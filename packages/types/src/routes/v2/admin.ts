@@ -755,6 +755,9 @@ const AdminSettingsUpdateBody = z.object({
       endTime: example(z.nullish(z.int()), 1710864000000).check(
         z.describe('CTF end time as a Unix ms timestamp.')
       ),
+      freezeTime: example(z.nullish(z.int()), 1710842400000).check(
+        z.describe('Scoreboard freeze time as a Unix ms timestamp.')
+      ),
       sponsors: z.nullish(z.array(SponsorUpdateSchemaV2)),
       meta: z.nullish(
         z.object({

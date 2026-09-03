@@ -15,6 +15,7 @@ order: 21
     "homeContent": "# Welcome",
     "startTime": 1770000000000,
     "endTime": 1770100000000,
+    "freezeTime": 1770090000000,
     "sponsors": [
       {
         "name": "Example",
@@ -42,7 +43,7 @@ order: 21
 
 This route updates runtime setting overrides. A nullable field set to `null{:ts}` clears that override and lets the configured default take effect again.
 
-Changing `startTime` or `endTime` also queues a leaderboard recalculation so standings match the updated event window.
+Changing `startTime`, `endTime`, or `freezeTime` also queues a leaderboard recalculation. A freeze time must fall inside the competition window. Once reached, it holds all public competitive data at that instant until the setting is cleared; users with `leaderboardRead` continue to see live data.
 
 ::request-body{def="UpdateAdminSettingsRouteV2" title="Request body"}
 

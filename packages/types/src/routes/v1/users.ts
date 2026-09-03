@@ -42,6 +42,7 @@ export const GetUserRoute = defineRoute({
   goodResponses: [GoodUserData],
   badResponses: [BadUnknownUser, BadNotStarted],
   authRequired: false,
+  optionalAuth: true,
   params: z.object({
     id: z.string().check(z.describe('Team ID.')),
   }),

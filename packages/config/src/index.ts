@@ -7,8 +7,16 @@ export * from './env'
 export * from './normalize'
 export * from './types'
 
-export const config = normalizeConfig(
-  ServerConfigSchema.parse(
-    deepMerge.all([...loadFileConfigs(), loadEnvConfig()])
-  )
+const parsedConfig = ServerConfigSchema.parse(
+  deepMerge.all([...loadFileConfigs(), loadEnvConfig()])
 )
+
+if (
+  parsedConfig.freezeTime !== undefined &&
+  (parsedConfig.freezeTime < parsedConfig.startTime ||
+    parsedConfig.freezeTime > parsedConfig.endTime)
+) {
+  throw new Error('freezeTime must be between startTime and endTime')
+}
+
+export const config = normalizeConfig(parsedConfig)

@@ -63,6 +63,7 @@ The following environment variables are supported. They override values from con
 | --------------------------------- | -------------- | ------------------------------------------ |
 | `<yellow>RCTF_START_TIME</yellow>`            | `integer{:ts}` | Competition start time (Unix milliseconds) |
 | `<yellow>RCTF_END_TIME</yellow>`              | `integer{:ts}` | Competition end time (Unix milliseconds)   |
+| `<yellow>RCTF_FREEZE_TIME</yellow>`           | `integer{:ts}` | Optional public scoreboard freeze time (Unix milliseconds) |
 | `<yellow>RCTF_LOGIN_TIMEOUT</yellow>`         | `integer{:ts}` | Verification token expiry in milliseconds  |
 | `<yellow>RCTF_USER_MEMBERS</yellow>`          | `boolean{:ts}` | Enable team members feature                |
 | `<yellow>RCTF_CTFTIME_CLIENT_ID</yellow>`     | `string{:ts}`  | CTFtime OAuth client ID                    |
@@ -175,12 +176,14 @@ database:
 ```yaml
 startTime: 1735689600000 # January 1, 2025 00:00 UTC
 endTime: 1735776000000 # January 2, 2025 00:00 UTC
+freezeTime: 1735754400000 # Optional: January 1, 2025 19:00 UTC
 ```
 
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `<red>startTime</red>` | `number{:ts}` | - | Competition start time in Unix milliseconds (required) |
 | `<red>endTime</red>` | `number{:ts}` | - | Competition end time in Unix milliseconds (required) |
+| `<red>freezeTime</red>` | `number{:ts}` | - | Optional time between start and end when public standings, graphs, profiles, challenge statistics, and CTFtime output stop updating. Teams retain live access to their own score and solves; users with `leaderboardRead` retain the live scoreboard. The freeze remains active until this setting is cleared. |
 
 :::tip
 To convert a date to Unix milliseconds: `$ <red>date</red> <dim>-d</dim> <green>"2025-01-01T00:00:00Z"</green> +%s000` or use `new Date('2025-01-01T00:00:00Z').getTime(){:ts}` in JavaScript.

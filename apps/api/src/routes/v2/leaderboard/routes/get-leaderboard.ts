@@ -5,11 +5,12 @@ import {
   searchLeaderboard,
 } from '../../../../services/leaderboard-queries'
 import { rateLimitSearch } from '../../../../services/rate-limit'
+import { getScoreboardView } from '../../../../services/scoreboard-visibility'
 import leaderboardGroup from '../group'
 
 leaderboardGroup.route(
   GetLeaderboardRouteV2,
-  async ({ ctx, res, query: { limit, offset, division, search } }) => {
+  async ({ ctx, user, res, query: { limit, offset, division, search } }) => {
     if (
       limit > config.leaderboard.maxLimit ||
       offset > config.leaderboard.maxOffset
@@ -25,6 +26,7 @@ leaderboardGroup.route(
       })
     }
 
+    const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
     if (search) {
       const timeLeft = await rateLimitSearch(ctx.var.redis, ctx.var.ip)
       if (timeLeft) {
@@ -32,12 +34,19 @@ leaderboardGroup.route(
       }
 
       return res.goodLeaderboardV2(
-        await searchLeaderboard(ctx.var.db, search, limit, offset, division)
+        await searchLeaderboard(
+          ctx.var.db,
+          search,
+          limit,
+          offset,
+          division,
+          view
+        )
       )
     }
 
     return res.goodLeaderboardV2(
-      await getLeaderboardWithTotal(ctx.var.db, limit, offset, division)
+      await getLeaderboardWithTotal(ctx.var.db, limit, offset, division, view)
     )
   }
 )

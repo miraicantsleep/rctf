@@ -3,12 +3,14 @@ import { GetLeaderboardWithGraphRoute } from '@rctf/types'
 import { getGraphForEntries } from '../../../../cache/leaderboard'
 import { getLeaderboardWithFilters } from '../../../../services/leaderboard-queries'
 import { rateLimitSearch } from '../../../../services/rate-limit'
+import { getScoreboardView } from '../../../../services/scoreboard-visibility'
 import leaderboardGroup from '../group'
 
 leaderboardGroup.route(
   GetLeaderboardWithGraphRoute,
   async ({
     ctx,
+    user,
     res,
     query: { limit, offset, division, search, challenge },
   }) => {
@@ -35,17 +37,17 @@ leaderboardGroup.route(
       }
     }
 
-    const { total, leaderboard } = await getLeaderboardWithFilters(ctx.var.db, {
-      limit,
-      offset,
-      division,
-      search,
-      challenge,
-    })
+    const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
+    const { total, leaderboard } = await getLeaderboardWithFilters(
+      ctx.var.db,
+      { limit, offset, division, search, challenge },
+      view
+    )
     const graph = await getGraphForEntries(
       ctx.var.db,
       ctx.var.redis,
-      leaderboard
+      leaderboard,
+      view
     )
 
     return res.goodLeaderboardWithGraph({ graph, total, leaderboard })

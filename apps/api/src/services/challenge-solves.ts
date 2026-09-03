@@ -7,6 +7,7 @@ import type {
   ResponseHelpers,
 } from '@rctf/types'
 import { getChallengeSolvesWithPosition } from './challenges'
+import type { ScoreboardView } from './scoreboard-visibility'
 
 type ChallengeSolvesResponseHelpers = ResponseHelpers<
   [typeof GoodChallengeSolvesV2, typeof BadChallenge, typeof BadBody]
@@ -20,6 +21,7 @@ export interface ChallengeSolvesRequest {
   limit: number
   offset: number
   includeHidden?: boolean
+  view?: ScoreboardView
 }
 
 export const getChallengeSolvesResponse = async ({
@@ -30,6 +32,7 @@ export const getChallengeSolvesResponse = async ({
   limit,
   offset,
   includeHidden,
+  view,
 }: ChallengeSolvesRequest): Promise<
   ReturnType<
     ChallengeSolvesResponseHelpers[keyof ChallengeSolvesResponseHelpers]
@@ -51,7 +54,7 @@ export const getChallengeSolvesResponse = async ({
       userId,
       limit,
       offset,
-      { includeHidden }
+      { includeHidden, view }
     )
 
   if (!challengeExists) {

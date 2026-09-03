@@ -49,9 +49,28 @@ export function createScoresData(config: ScoresDataConfig) {
   const currentUser = $derived(userQuery.data)
   const currentUserId = $derived(currentUser?.id ?? null)
   const challengesData = $derived(challengesQuery.data ?? {})
-  const entries = $derived(
-    getFocusedEntries(rawEntries, config.focusedChallengeId(), challengesData)
-  )
+  const entries = $derived.by(() => {
+    const focused = getFocusedEntries(
+      rawEntries,
+      config.focusedChallengeId(),
+      challengesData
+    )
+    if (!currentUser) return focused
+
+    return focused.map(entry =>
+      entry.id === currentUser.id
+        ? {
+            ...entry,
+            score: currentUser.score,
+            solves: currentUser.solves.map(solve => ({
+              id: solve.id,
+              solveTime: solve.createdAt,
+            })),
+            dynamicScores: currentUser.dynamicScores,
+          }
+        : entry
+    )
+  })
 
   const selfGraphQuery = useSelfUserGraph(
     () =>

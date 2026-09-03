@@ -14,7 +14,10 @@ export type SettingsPatch = {
 }
 
 export type ResolvedSettings = ReturnType<typeof resolveSettings>
-export type CompetitionTiming = Pick<ResolvedSettings, 'startTime' | 'endTime'>
+export type CompetitionTiming = Pick<
+  ResolvedSettings,
+  'startTime' | 'endTime' | 'freezeTime'
+>
 
 type CachedResolvedSettings = {
   version: 1
@@ -81,6 +84,7 @@ export function getConfigDefaults(): EditableSettings {
     homeContent: config.homeContent,
     startTime: config.startTime,
     endTime: config.endTime,
+    freezeTime: config.freezeTime,
     sponsors: config.sponsors,
     meta: config.meta,
     faviconUrl: config.faviconUrl,
@@ -95,6 +99,7 @@ export function resolveSettings(overrides: EditableSettings) {
     homeContent: overrides.homeContent ?? config.homeContent,
     startTime: overrides.startTime ?? config.startTime,
     endTime: overrides.endTime ?? config.endTime,
+    freezeTime: overrides.freezeTime ?? config.freezeTime ?? null,
     sponsors: overrides.sponsors ?? config.sponsors,
     meta: {
       description: overrides.meta?.description ?? config.meta.description,
@@ -181,6 +186,15 @@ export async function getCompetitionTiming(
   db: DatabaseClient,
   redis?: TypedRedis
 ): Promise<CompetitionTiming> {
-  const { startTime, endTime } = await getResolvedSettings(db, redis)
-  return { startTime, endTime }
+  const { startTime, endTime, freezeTime } = await getResolvedSettings(
+    db,
+    redis
+  )
+  return { startTime, endTime, freezeTime }
 }
+
+export const isScoreboardFrozen = (
+  timing: CompetitionTiming,
+  now = Date.now()
+): timing is CompetitionTiming & { freezeTime: number } =>
+  timing.freezeTime !== null && now >= timing.freezeTime

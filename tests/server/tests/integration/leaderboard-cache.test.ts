@@ -4,6 +4,7 @@ import {
   ChallengeScoringKind,
   createDatabase,
   DynamicScoringTransport,
+  scoreEvents,
   settings,
   solves,
   users,
@@ -18,7 +19,13 @@ import { afterEach, describe, expect, mock, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import type { PinoLogger } from 'hono-pino'
 import type { TypedRedis } from '../../../../apps/api/src/cache/scripts'
+import {
+  cacheFrozenLeaderboardAndGraph,
+  getGraph,
+  isFrozenSnapshotReady,
+} from '../../../../apps/api/src/cache/leaderboard'
 import { scoreProvider } from '../../../../apps/api/src/providers/instances/score'
+import { getDynamicScoresForUsers } from '../../../../apps/api/src/services/challenges'
 import {
   calculateLeaderboard,
   createCachedLeaderboardCalculator,
@@ -27,6 +34,7 @@ import {
   applyChallengeConfigChange,
   applyDecayPointsForAllChallenges,
 } from '../../../../apps/api/src/services/solve-points'
+import { createRedis } from '../../../../apps/api/src/util/redis'
 
 const getDb = () => createDatabase(config.database.sql).db
 
@@ -102,6 +110,7 @@ const insertSolve = async (params: {
   createdAt?: string
   points?: number
   pointsUpdatedAt?: string
+  source?: 'flag' | 'feed'
 }) => {
   const db = getDb()
   const id = crypto.randomUUID()
@@ -111,6 +120,7 @@ const insertSolve = async (params: {
     challengeid: params.challengeId,
     userid: params.userId,
     createdat: params.createdAt ?? new Date().toISOString(),
+    source: params.source ?? 'flag',
     ...(params.points !== undefined ? { points: params.points } : {}),
     ...(params.pointsUpdatedAt !== undefined
       ? { pointsUpdatedAt: params.pointsUpdatedAt }
@@ -176,6 +186,126 @@ const T2 = T0 + 2000
 const T3 = T0 + 3000
 const T4 = T0 + 4000
 const isoAt = (ms: number) => new Date(ms).toISOString()
+
+describe('frozen leaderboard cutoff', () => {
+  test('does not expose a stale graph while a replacement snapshot is pending', async () => {
+    const db = getDb()
+    const user = await insertUser('pending-freeze')
+    await db
+      .update(users)
+      .set({ frozenScore: 123, frozenGlobalRank: 1, frozenDivisionRank: 1 })
+      .where(eq(users.id, user.id))
+
+    const redis = await createRedis()
+    const graph = await getGraph(db, redis, 10, 0, undefined, {
+      frozen: true,
+      cutoff: T1,
+      ready: false,
+    })
+
+    expect(graph).toEqual([])
+  })
+
+  test('excludes solves created after the cutoff', async () => {
+    const db = getDb()
+    const before = await insertUser('before-freeze')
+    const after = await insertUser('after-freeze')
+    const challenge = await insertChallenge()
+
+    await insertSolve({
+      challengeId: challenge.id,
+      userId: before.id,
+      createdAt: isoAt(T0),
+    })
+    await insertSolve({
+      challengeId: challenge.id,
+      userId: after.id,
+      createdAt: isoAt(T2),
+    })
+
+    const frozen = await calculateLeaderboard(db, undefined, { cutoff: T1 })
+    expect(frozen.users.some(user => user.id === before.id)).toBe(true)
+    expect(frozen.users.some(user => user.id === after.id)).toBe(false)
+    expect(frozen.challengeInfos.get(challenge.id)?.solves).toBe(1)
+
+    const redis = await createRedis()
+    const timing = {
+      startTime: config.startTime,
+      endTime: config.endTime,
+      freezeTime: T1,
+    }
+    await cacheFrozenLeaderboardAndGraph(db, redis, frozen, timing)
+    const [storedBefore] = await db
+      .select({ score: users.frozenScore, rank: users.frozenGlobalRank })
+      .from(users)
+      .where(eq(users.id, before.id))
+    const [storedAfter] = await db
+      .select({ score: users.frozenScore, rank: users.frozenGlobalRank })
+      .from(users)
+      .where(eq(users.id, after.id))
+    const [storedChallenge] = await db
+      .select({ solves: challenges.frozenSolveCount })
+      .from(challenges)
+      .where(eq(challenges.id, challenge.id))
+    expect(storedBefore?.score).toBeGreaterThan(0)
+    expect(storedBefore?.rank).not.toBeNull()
+    expect(storedAfter?.rank).toBeNull()
+    expect(storedChallenge?.solves).toBe(1)
+    expect(await isFrozenSnapshotReady(redis, timing)).toBe(true)
+
+    cleanups.push(async () => {
+      const frozenKeys = await redis.keys('frozen-*')
+      if (frozenKeys.length > 0) await redis.del(...frozenKeys)
+    })
+  })
+
+  test('replays dynamic score events only through the cutoff', async () => {
+    const db = getDb()
+    const user = await insertUser('dynamic-before-freeze')
+    const challenge = await insertChallenge({
+      flags: [],
+      scoring: {
+        kind: ChallengeScoringKind.DYNAMIC,
+        source: {
+          transport: DynamicScoringTransport.WEBHOOK,
+          secret: crypto.randomUUID(),
+        },
+      },
+    })
+    await insertSolve({
+      challengeId: challenge.id,
+      userId: user.id,
+      createdAt: isoAt(T0),
+      points: 200,
+      pointsUpdatedAt: isoAt(T2),
+      source: 'feed',
+    })
+    await db.insert(scoreEvents).values([
+      {
+        id: crypto.randomUUID(),
+        challengeid: challenge.id,
+        userid: user.id,
+        pointsDelta: 80,
+        eventAt: isoAt(T0),
+        source: 'feed',
+      },
+      {
+        id: crypto.randomUUID(),
+        challengeid: challenge.id,
+        userid: user.id,
+        pointsDelta: 120,
+        eventAt: isoAt(T2),
+        source: 'feed',
+      },
+    ])
+
+    const frozen = await calculateLeaderboard(db, undefined, { cutoff: T1 })
+    expect(frozen.users.find(entry => entry.id === user.id)?.score).toBe(80)
+    expect(await getDynamicScoresForUsers(db, [user.id], T1)).toEqual(
+      new Map([[user.id, [{ id: challenge.id, points: 80, pointDelta: 80 }]]])
+    )
+  })
+})
 
 describe('cached leaderboard calculator', () => {
   test('returns unchanged when there are no new solves or metadata changes', async () => {

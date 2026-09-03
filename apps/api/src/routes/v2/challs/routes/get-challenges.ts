@@ -2,6 +2,7 @@ import { ChallengeScoringKind, GetChallengesRouteV2 } from '@rctf/types'
 import { adminBotEnabled } from '../../../../providers/instances/admin-bot'
 import { instancerEnabled } from '../../../../providers/instances/instancer'
 import { getChallenges } from '../../../../services/challenges'
+import { getScoreboardView } from '../../../../services/scoreboard-visibility'
 import {
   resolveInstancerActions,
   resolveInstancerCapabilities,
@@ -9,7 +10,8 @@ import {
 import challsGroup from '../group'
 
 challsGroup.route(GetChallengesRouteV2, async ({ res, ctx, user }) => {
-  const challenges = await getChallenges(ctx.var.db, user?.id)
+  const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
+  const challenges = await getChallenges(ctx.var.db, user?.id, view)
 
   return res.goodChallengesV2(
     challenges.map(item => {

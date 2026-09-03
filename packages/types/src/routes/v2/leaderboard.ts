@@ -17,6 +17,7 @@ export const GetLeaderboardRouteV2 = defineRoute({
   goodResponses: [GoodLeaderboardV2],
   badResponses: [BadNotStarted, BadBody, BadRateLimit],
   authRequired: false,
+  optionalAuth: true,
   query: z.object({
     // NOTE: Has max limits that are loaded from config
     limit: z
@@ -52,6 +53,7 @@ export const GetLeaderboardChallengesRouteV2 = defineRoute({
   goodResponses: [GoodLeaderboardChallengesV2],
   badResponses: [BadNotStarted],
   authRequired: false,
+  optionalAuth: true,
   onlyWhenStarted: true,
   onlyWhenStartedPermissionsBypass: Permissions.challsRead,
 })
@@ -62,6 +64,7 @@ export const GetLeaderboardGraphRouteV2 = defineRoute({
   goodResponses: [GoodLeaderboardGraph],
   badResponses: [BadNotStarted, BadBody],
   authRequired: false,
+  optionalAuth: true,
   query: z.object({
     // NOTE: Has max limit that is loaded from config
     limit: z
@@ -90,6 +93,7 @@ export const GetLeaderboardWithGraphRoute = defineRoute({
   goodResponses: [GoodLeaderboardWithGraph],
   badResponses: [BadNotStarted, BadBody, BadRateLimit],
   authRequired: false,
+  optionalAuth: true,
   query: z.object({
     // NOTE: Has max limits that are loaded from config
     limit: z

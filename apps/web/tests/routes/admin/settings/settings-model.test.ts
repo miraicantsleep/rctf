@@ -20,7 +20,12 @@ function cleanState(): SettingsFormState {
   return {
     ctfName: { value: '', dirty: false },
     faviconUrl: { value: '', dirty: false },
-    timing: { startTime: null, endTime: null, dirty: false },
+    timing: {
+      startTime: null,
+      endTime: null,
+      freezeTime: null,
+      dirty: false,
+    },
     logo: { light: '', dark: '', dirty: false },
     homeContent: { value: '', dirty: false },
     meta: { description: '', imageUrl: '', dirty: false },
@@ -56,12 +61,18 @@ describe('buildPatch', () => {
   it('assembles a mixed patch of edits, resets, and untouched fields', () => {
     const state = cleanState()
     state.ctfName = { value: 'osec CTF', dirty: true }
-    state.timing = { startTime: 1000, endTime: 2000, dirty: true }
+    state.timing = {
+      startTime: 1000,
+      endTime: 2000,
+      freezeTime: null,
+      dirty: true,
+    }
     state.faviconUrl.value = '/stale.ico'
     expect(buildPatch(state, { startTime: 1000, endTime: 2000 })).toEqual({
       ctfName: 'osec CTF',
       startTime: null,
       endTime: null,
+      freezeTime: null,
     })
   })
 
@@ -70,11 +81,13 @@ describe('buildPatch', () => {
     state.timing = {
       startTime: 1710000000000,
       endTime: 1710864000000,
+      freezeTime: 1710800000000,
       dirty: true,
     }
     expect(buildPatch(state, {})).toEqual({
       startTime: 1710000000000,
       endTime: 1710864000000,
+      freezeTime: 1710800000000,
     })
   })
 
@@ -169,29 +182,39 @@ describe('buildPatch', () => {
 
 describe('validateTiming', () => {
   it('skips validation when the timing values match the defaults', () => {
-    expect(validateTiming(null, null, false)).toBeNull()
+    expect(validateTiming(null, null, null, false)).toBeNull()
   })
 
   it('requires both endpoints when active', () => {
-    expect(validateTiming(null, 2000, true)).toBe(
+    expect(validateTiming(null, 2000, null, true)).toBe(
       'Start and end time are required.'
     )
-    expect(validateTiming(1000, null, true)).toBe(
+    expect(validateTiming(1000, null, null, true)).toBe(
       'Start and end time are required.'
     )
   })
 
   it('requires start before end', () => {
-    expect(validateTiming(2000, 1000, true)).toBe(
+    expect(validateTiming(2000, 1000, null, true)).toBe(
       'Start time must be before end time.'
     )
-    expect(validateTiming(2000, 2000, true)).toBe(
+    expect(validateTiming(2000, 2000, null, true)).toBe(
       'Start time must be before end time.'
     )
   })
 
   it('accepts a valid ordered pair', () => {
-    expect(validateTiming(1000, 2000, true)).toBeNull()
+    expect(validateTiming(1000, 2000, null, true)).toBeNull()
+    expect(validateTiming(1000, 2000, 1500, true)).toBeNull()
+  })
+
+  it('requires the freeze time to be within the competition window', () => {
+    expect(validateTiming(1000, 2000, 999, true)).toBe(
+      'Scoreboard freeze time must be between start and end time.'
+    )
+    expect(validateTiming(1000, 2000, 2001, true)).toBe(
+      'Scoreboard freeze time must be between start and end time.'
+    )
   })
 })
 
@@ -364,11 +387,13 @@ describe('reset builders', () => {
     expect(resetGroup(defaults, 'timing')).toEqual({
       startTime: 1000,
       endTime: 2000,
+      freezeTime: null,
       dirty: true,
     })
     expect(resetGroup({}, 'timing')).toEqual({
       startTime: null,
       endTime: null,
+      freezeTime: null,
       dirty: true,
     })
   })

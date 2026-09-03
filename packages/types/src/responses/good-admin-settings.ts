@@ -16,6 +16,9 @@ export const AdminSettingsSchema = z.object({
   endTime: example(z.optional(z.int()), 1710864000000).check(
     z.describe('CTF end time as a Unix timestamp in milliseconds.')
   ),
+  freezeTime: example(z.optional(z.int()), 1710842400000).check(
+    z.describe('Scoreboard freeze time as a Unix timestamp in milliseconds.')
+  ),
   sponsors: z.optional(z.array(SponsorSchemaV2)),
   meta: z.optional(
     z.object({

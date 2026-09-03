@@ -19,6 +19,7 @@ export interface AdminSettingsShape {
   faviconUrl?: string
   startTime?: number
   endTime?: number
+  freezeTime?: number
   homeContent?: string
   logoLightUrl?: string
   logoDarkUrl?: string
@@ -34,6 +35,7 @@ interface ScalarGroup {
 interface TimingGroup {
   startTime: number | null
   endTime: number | null
+  freezeTime: number | null
   dirty: boolean
 }
 
@@ -69,6 +71,7 @@ export interface SettingsPatch {
   faviconUrl?: string | null
   startTime?: number | null
   endTime?: number | null
+  freezeTime?: number | null
   homeContent?: string | null
   logoLightUrl?: string | null
   logoDarkUrl?: string | null
@@ -98,6 +101,7 @@ export function buildPatch(
     const matches = groupMatchesDefaults(state, 'timing', defaults)
     patch.startTime = matches ? null : state.timing.startTime
     patch.endTime = matches ? null : state.timing.endTime
+    patch.freezeTime = matches ? null : state.timing.freezeTime
   }
 
   if (state.logo.dirty) {
@@ -130,6 +134,7 @@ export function buildPatch(
 export function validateTiming(
   start: number | null,
   end: number | null,
+  freeze: number | null,
   active: boolean
 ): string | null {
   if (!active) return null
@@ -138,6 +143,9 @@ export function validateTiming(
   }
   if (start >= end) {
     return 'Start time must be before end time.'
+  }
+  if (freeze !== null && (freeze < start || freeze > end)) {
+    return 'Scoreboard freeze time must be between start and end time.'
   }
   return null
 }
@@ -225,6 +233,7 @@ export function initialFormState(
     timing: {
       startTime: overrides.startTime ?? defaults.startTime ?? null,
       endTime: overrides.endTime ?? defaults.endTime ?? null,
+      freezeTime: overrides.freezeTime ?? defaults.freezeTime ?? null,
       dirty: false,
     },
     logo: {
@@ -262,7 +271,8 @@ export function groupMatchesDefaults(
     case 'timing':
       return (
         form.timing.startTime === (defaults.startTime ?? null) &&
-        form.timing.endTime === (defaults.endTime ?? null)
+        form.timing.endTime === (defaults.endTime ?? null) &&
+        form.timing.freezeTime === (defaults.freezeTime ?? null)
       )
     case 'logo':
       return (

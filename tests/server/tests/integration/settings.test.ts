@@ -2,6 +2,7 @@ import { config } from '@rctf/config'
 import { createDatabase, settings, type EditableSponsor } from '@rctf/db'
 import {
   BadEnded,
+  BadBody,
   BadNotStarted,
   BadPerms,
   BadToken,
@@ -22,9 +23,15 @@ import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import {
   getConfigDefaults,
+  getCompetitionTiming,
   invalidateResolvedSettingsCache,
   resolveSettings,
 } from '../../../../apps/api/src/services/settings'
+import {
+  frozenSnapshotFingerprint,
+  keyFrozenSnapshotFingerprint,
+} from '../../../../apps/api/src/cache/leaderboard'
+import { getScoreboardView } from '../../../../apps/api/src/services/scoreboard-visibility'
 import { createRedis } from '../../../../apps/api/src/util/redis'
 import { getApp, request } from '../../app'
 import {
@@ -46,6 +53,7 @@ const cleanupSettings = async () => {
   const redis = await createRedis()
   await db.delete(settings).where(eq(settings.id, 'value-0'))
   await invalidateResolvedSettingsCache(redis)
+  await redis.del(keyFrozenSnapshotFingerprint)
 }
 
 const authHeaders = async (userId: string) => ({
@@ -154,6 +162,7 @@ describe('admin settings', () => {
       expect(body.data.defaults.homeContent).toBe(config.homeContent)
       expect(body.data.defaults.startTime).toBe(config.startTime)
       expect(body.data.defaults.endTime).toBe(config.endTime)
+      expect(body.data.defaults.freezeTime).toBe(config.freezeTime)
       expect(body.data.defaults.faviconUrl).toBe(config.faviconUrl)
       expect(body.data.defaults.meta).toEqual(config.meta)
       expect(body.data.defaults.sponsors).toEqual(config.sponsors)
@@ -228,14 +237,29 @@ describe('admin settings', () => {
     test('sets competition timing overrides', async () => {
       const startTime = Date.now() + 60_000
       const endTime = startTime + 3_600_000
+      const freezeTime = startTime + 3_000_000
       const res = await request(app, '/api/v2/admin/settings', {
         method: 'PUT',
         headers: await jsonHeaders(settingsAdmin.user.id),
-        body: JSON.stringify({ data: { startTime, endTime } }),
+        body: JSON.stringify({ data: { startTime, endTime, freezeTime } }),
       })
       const body = await expectResponse(res, GoodAdminSettingsUpdate)
       expect(body.data.overrides.startTime).toBe(startTime)
       expect(body.data.overrides.endTime).toBe(endTime)
+      expect(body.data.overrides.freezeTime).toBe(freezeTime)
+    })
+
+    test('rejects a freeze time outside the competition window', async () => {
+      const startTime = Date.now() + 60_000
+      const endTime = startTime + 3_600_000
+      const res = await request(app, '/api/v2/admin/settings', {
+        method: 'PUT',
+        headers: await jsonHeaders(settingsAdmin.user.id),
+        body: JSON.stringify({
+          data: { startTime, endTime, freezeTime: endTime + 1 },
+        }),
+      })
+      await expectResponse(res, BadBody)
     })
 
     test('sets faviconUrl override', async () => {
@@ -384,6 +408,7 @@ describe('admin settings', () => {
         homeContent: '# All',
         startTime: config.startTime + 1000,
         endTime: config.endTime - 1000,
+        freezeTime: config.startTime + 2000,
         faviconUrl: 'all.ico',
         meta: { description: 'All desc', imageUrl: 'all.png' },
         sponsors: [
@@ -684,6 +709,7 @@ describe('admin settings', () => {
     test('v2 client config uses DB overrides for competition timing', async () => {
       const startTime = config.startTime + 12_345
       const endTime = config.endTime - 54_321
+      const freezeTime = endTime - 12_345
 
       const before = await request(app, '/api/v2/integrations/client/config', {
         method: 'GET',
@@ -691,11 +717,12 @@ describe('admin settings', () => {
       const beforeBody = await expectResponse(before, GoodClientConfigV2)
       expect(beforeBody.data.startTime).toBe(config.startTime)
       expect(beforeBody.data.endTime).toBe(config.endTime)
+      expect(beforeBody.data.freezeTime).toBe(config.freezeTime ?? null)
 
       await request(app, '/api/v2/admin/settings', {
         method: 'PUT',
         headers: await jsonHeaders(settingsAdmin.user.id),
-        body: JSON.stringify({ data: { startTime, endTime } }),
+        body: JSON.stringify({ data: { startTime, endTime, freezeTime } }),
       })
 
       const res = await request(app, '/api/v2/integrations/client/config', {
@@ -704,6 +731,7 @@ describe('admin settings', () => {
       const body = await expectResponse(res, GoodClientConfigV2)
       expect(body.data.startTime).toBe(startTime)
       expect(body.data.endTime).toBe(endTime)
+      expect(body.data.freezeTime).toBe(freezeTime)
     })
 
     test('v2 client config uses DB overrides for sponsors', async () => {
@@ -905,6 +933,46 @@ describe('admin settings', () => {
   })
 
   describe('runtime timing enforcement', () => {
+    test('freezes public views while leaderboard readers retain live access', async () => {
+      const leaderboardAdmin = await generateRealTestUser(
+        Permissions.leaderboardRead
+      )
+      const redis = await createRedis()
+      const now = Date.now()
+      const startTime = now - 3_600_000
+      const freezeTime = now - 60_000
+      const endTime = now + 3_600_000
+
+      try {
+        await request(app, '/api/v2/admin/settings', {
+          method: 'PUT',
+          headers: await jsonHeaders(settingsAdmin.user.id),
+          body: JSON.stringify({
+            data: { startTime, endTime, freezeTime },
+          }),
+        })
+        const timing = await getCompetitionTiming(getDb(), redis)
+        await redis.set(
+          keyFrozenSnapshotFingerprint,
+          frozenSnapshotFingerprint({ ...timing, freezeTime })
+        )
+
+        expect(await getScoreboardView(getDb(), redis)).toEqual({
+          frozen: true,
+          cutoff: freezeTime,
+          ready: true,
+        })
+        expect(
+          await getScoreboardView(getDb(), redis, leaderboardAdmin.user)
+        ).toEqual({ frozen: false, cutoff: undefined, ready: true })
+        expect(
+          await getScoreboardView(getDb(), redis, leaderboardAdmin.user, true)
+        ).toEqual({ frozen: true, cutoff: freezeTime, ready: true })
+      } finally {
+        await leaderboardAdmin.cleanup()
+      }
+    })
+
     test('challenge routes use stored start time overrides', async () => {
       const startTime = Date.now() + 60_000
       const endTime = startTime + 3_600_000

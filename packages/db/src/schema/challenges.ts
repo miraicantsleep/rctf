@@ -92,6 +92,8 @@ export const challenges = pgTable(
     data: jsonb().$type<ChallengeData>().notNull(),
     score: integer().notNull().default(0),
     solveCount: integer('solve_count').notNull().default(0),
+    frozenScore: integer('frozen_score'),
+    frozenSolveCount: integer('frozen_solve_count'),
   },
   table => [
     index('challenges_sortweight_index').using(

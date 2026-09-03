@@ -81,6 +81,7 @@ export const ServerConfigSchema = z.object({
   // CTF timing
   startTime: z.number(), // unix ms
   endTime: z.number(), // unix ms
+  freezeTime: z.optional(z.number()), // unix ms
 
   // Divisions
   divisions: z._default(z.record(z.string(), z.string()), { open: 'Open' }), // id -> display name

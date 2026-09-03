@@ -14,6 +14,7 @@ export interface EditableSettings {
   homeContent?: string
   startTime?: number
   endTime?: number
+  freezeTime?: number
   sponsors?: EditableSponsor[]
   meta?: {
     description?: string

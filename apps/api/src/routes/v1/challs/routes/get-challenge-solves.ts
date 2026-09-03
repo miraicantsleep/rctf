@@ -4,11 +4,12 @@ import {
   getChallenge,
   getChallengeSolves,
 } from '../../../../services/challenges'
+import { getScoreboardView } from '../../../../services/scoreboard-visibility'
 import challsGroup from '../group'
 
 challsGroup.route(
   GetChallengeSolvesRoute,
-  async ({ res, ctx, params, query }) => {
+  async ({ res, ctx, user, params, query }) => {
     // NOTE: Handling manually because the values are loaded from config
     if (
       query.limit > config.leaderboard.maxLimit ||
@@ -19,9 +20,16 @@ challsGroup.route(
       })
     }
 
+    const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
     const [challenge, solves] = await Promise.all([
       getChallenge(ctx.var.db, params.id),
-      getChallengeSolves(ctx.var.db, params.id, query.limit, query.offset),
+      getChallengeSolves(
+        ctx.var.db,
+        params.id,
+        query.limit,
+        query.offset,
+        view.frozen ? view.cutoff : undefined
+      ),
     ])
 
     if (!challenge) {

@@ -4,6 +4,7 @@ import {
   getChallengeScoresGraph,
   getChallengeScoresWithPosition,
 } from '../../../../services/challenges'
+import { getScoreboardView } from '../../../../services/scoreboard-visibility'
 import challsGroup from '../group'
 
 challsGroup.route(
@@ -19,13 +20,15 @@ challsGroup.route(
       })
     }
 
+    const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
     const { challengeExists, scores, total, myPosition } =
       await getChallengeScoresWithPosition(
         ctx.var.db,
         params.id,
         user?.id ?? null,
         query.limit,
-        query.offset
+        query.offset,
+        view
       )
 
     if (!challengeExists) {
@@ -42,7 +45,8 @@ challsGroup.route(
       ctx.var.db,
       params.id,
       graphUserIds,
-      ctx.var.redis
+      ctx.var.redis,
+      view.frozen ? view.cutoff : undefined
     )
 
     return res.goodChallengeScoresV2({ total, myPosition, scores, graph })

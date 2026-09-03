@@ -14,6 +14,7 @@ export const GetLeaderboardRoute = defineRoute({
   goodResponses: [GoodLeaderboard],
   badResponses: [BadNotStarted, BadBody],
   authRequired: false,
+  optionalAuth: true,
   query: z.object({
     // NOTE: Has max limits that are loaded from config
     limit: z
@@ -42,6 +43,7 @@ export const GetLeaderboardGraphRoute = defineRoute({
   goodResponses: [GoodLeaderboardGraph],
   badResponses: [BadNotStarted, BadBody],
   authRequired: false,
+  optionalAuth: true,
   query: z.object({
     // NOTE: Has max limit that is loaded from config
     limit: z

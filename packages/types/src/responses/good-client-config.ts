@@ -52,6 +52,9 @@ export const GoodClientConfig = response('goodClientConfig', {
     endTime: example(z.int(), 1710864000000).check(
       z.describe('CTF end time as a Unix timestamp in milliseconds.')
     ),
+    freezeTime: example(z.nullable(z.int()), 1710842400000).check(
+      z.describe('Public scoreboard freeze time, or `null` when disabled.')
+    ),
     userMembers: example(z.boolean(), true).check(
       z.describe('Whether teams may add individual members.')
     ),

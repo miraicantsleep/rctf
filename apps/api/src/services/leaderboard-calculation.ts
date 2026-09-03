@@ -1,10 +1,10 @@
 import { config } from '@rctf/config'
 import type { DatabaseClient } from '@rctf/db'
-import { challenges, solves, users } from '@rctf/db'
+import { challenges, scoreEvents, solves, users } from '@rctf/db'
 import { takeUnique } from '@rctf/db/util'
 import type { ScoreContext } from '@rctf/scoring/base'
 import { ChallengeScoringKind } from '@rctf/types'
-import { and, asc, inArray, sql } from 'drizzle-orm'
+import { and, asc, inArray, lte, sql, sum } from 'drizzle-orm'
 import type {
   CalculatedLeaderboard,
   InternalChallengeInfo,
@@ -45,8 +45,14 @@ const buildScoreContext = (
   firstSolveTime: ch.firstSolveTime,
 })
 
-const timingFingerprint = (timing: CompetitionTiming): string =>
-  `${timing.startTime}:${timing.endTime}`
+const timingFingerprint = (
+  timing: CompetitionTiming,
+  cutoff?: number
+): string => `${timing.startTime}:${timing.endTime}:${cutoff ?? 'live'}`
+
+export type LeaderboardCalculationOptions = {
+  cutoff?: number
+}
 
 type LeaderboardRuntimeState = {
   providerIdentity: string
@@ -186,19 +192,28 @@ const getPublicChallengesSnapshot = (
     .where(challengeIsPublicSql)
     .orderBy(asc(challenges.id))
 
-const getSolveCount = async (db: DatabaseClient): Promise<number> =>
+const getSolveCount = async (
+  db: DatabaseClient,
+  cutoff?: number
+): Promise<number> =>
   (
     await db
       .select({
         count: sql<number>`count(*)::int`,
       })
       .from(solves)
+      .where(
+        cutoff === undefined
+          ? undefined
+          : lte(solves.createdat, new Date(cutoff).toISOString())
+      )
       .then(takeUnique)
   )?.count ?? 0
 
 const getSolvesAfterCursor = (
   db: DatabaseClient,
-  cursor: RowCursor | null
+  cursor: RowCursor | null,
+  cutoff?: number
 ): Promise<SolveRow[]> =>
   db
     .select({
@@ -210,7 +225,14 @@ const getSolvesAfterCursor = (
       pointsUpdatedAt: solves.pointsUpdatedAt,
     })
     .from(solves)
-    .where(cursorAfter(solves.createdat, solves.id, cursor))
+    .where(
+      and(
+        cursorAfter(solves.createdat, solves.id, cursor),
+        cutoff === undefined
+          ? undefined
+          : lte(solves.createdat, new Date(cutoff).toISOString())
+      )
+    )
     .orderBy(asc(solves.createdat), asc(solves.id))
 
 const patchUsers = (
@@ -580,14 +602,24 @@ const rebuildRuntimeState = async (
   db: DatabaseClient,
   seed: LeaderboardRebuildSeed,
   now: number,
-  timing: CompetitionTiming
+  timing: CompetitionTiming,
+  cutoff?: number
 ): Promise<LeaderboardRuntimeState> => {
   const state = createRuntimeState(seed, timing)
-  const allSolves = await getSolvesAfterCursor(db, null)
+  const allSolves = await getSolvesAfterCursor(db, null, cutoff)
 
-  const batchResult = processSolveBatch(state, allSolves, now, timing)
+  const batchResult = processSolveBatch(
+    state,
+    allSolves,
+    cutoff === undefined ? now : Math.min(now, cutoff),
+    timing
+  )
   state.processedSolveCount = batchResult.consumedSolveCount
   state.lastSolveCursor = batchResult.lastConsumedSolveCursor
+
+  if (cutoff !== undefined) {
+    await loadFrozenDynamicContribs(db, state, timing, cutoff)
+  }
 
   return state
 }
@@ -598,7 +630,8 @@ export const getCurrentScoreProviderIdentity = (): string =>
 const loadLeaderboardSeed = async (
   db: DatabaseClient,
   redis: TypedRedis | undefined,
-  providerIdentity = getCurrentScoreProviderIdentity()
+  providerIdentity = getCurrentScoreProviderIdentity(),
+  cutoff?: number
 ): Promise<{ seed: LeaderboardRebuildSeed; timing: CompetitionTiming }> => {
   const [dbUsers, dbChallenges, timing] = await Promise.all([
     getUsersSnapshot(db),
@@ -609,7 +642,7 @@ const loadLeaderboardSeed = async (
     timing,
     seed: {
       providerIdentity,
-      timingFingerprint: timingFingerprint(timing),
+      timingFingerprint: timingFingerprint(timing, cutoff),
       challengesFingerprint: buildChallengesFingerprint(dbChallenges),
       dbUsers,
       dbChallenges,
@@ -619,32 +652,55 @@ const loadLeaderboardSeed = async (
 
 export const calculateLeaderboard = async (
   db: DatabaseClient,
-  redis?: TypedRedis
+  redis?: TypedRedis,
+  options: LeaderboardCalculationOptions = {}
 ): Promise<CalculatedLeaderboard> => {
   const now = Date.now()
-  const { seed, timing } = await loadLeaderboardSeed(db, redis)
-  const runtimeState = await rebuildRuntimeState(db, seed, now, timing)
+  const { cutoff } = options
+  const { seed, timing } = await loadLeaderboardSeed(
+    db,
+    redis,
+    undefined,
+    cutoff
+  )
+  const runtimeState = await rebuildRuntimeState(db, seed, now, timing, cutoff)
   return cloneCalculatedLeaderboard(runtimeState)
 }
 
-export const createCachedLeaderboardCalculator = (redis?: TypedRedis) => {
+export const createCachedLeaderboardCalculator = (
+  redis?: TypedRedis,
+  options: LeaderboardCalculationOptions = {}
+) => {
   let state: LeaderboardRuntimeState | null = null
   return async (
     db: DatabaseClient,
     providerIdentityOverride?: string
   ): Promise<CachedLeaderboardComputation> => {
     const now = Date.now()
+    const { cutoff } = options
     const providerIdentity =
       providerIdentityOverride ?? getCurrentScoreProviderIdentity()
     const { seed, timing } = await loadLeaderboardSeed(
       db,
       redis,
-      providerIdentity
+      providerIdentity,
+      cutoff
     )
 
     const rebuild = async (): Promise<CachedLeaderboardComputation> => {
-      const fresh = await loadLeaderboardSeed(db, redis, providerIdentity)
-      state = await rebuildRuntimeState(db, fresh.seed, now, fresh.timing)
+      const fresh = await loadLeaderboardSeed(
+        db,
+        redis,
+        providerIdentity,
+        cutoff
+      )
+      state = await rebuildRuntimeState(
+        db,
+        fresh.seed,
+        now,
+        fresh.timing,
+        cutoff
+      )
 
       return {
         calculated: cloneCalculatedLeaderboard(state),
@@ -667,15 +723,22 @@ export const createCachedLeaderboardCalculator = (redis?: TypedRedis) => {
       return await rebuild()
     }
 
-    const deltaSolves = await getSolvesAfterCursor(db, state.lastSolveCursor)
+    const deltaSolves = await getSolvesAfterCursor(
+      db,
+      state.lastSolveCursor,
+      cutoff
+    )
 
     if (deltaSolves.length === 0) {
-      const totalSolves = await getSolveCount(db)
+      const totalSolves = await getSolveCount(db, cutoff)
       if (totalSolves !== state.processedSolveCount) {
         return await rebuild()
       }
 
-      const dynamicRefresh = await refreshDynamicContribs(db, state, timing)
+      const dynamicRefresh =
+        cutoff === undefined
+          ? await refreshDynamicContribs(db, state, timing)
+          : { changed: false, needsRebuild: false }
       if (dynamicRefresh.needsRebuild) {
         return await rebuild()
       }
@@ -686,14 +749,19 @@ export const createCachedLeaderboardCalculator = (redis?: TypedRedis) => {
       }
     }
 
-    const totalSolves = await getSolveCount(db)
+    const totalSolves = await getSolveCount(db, cutoff)
     const expectedDelta = totalSolves - state.processedSolveCount
     if (deltaSolves.length !== expectedDelta) {
       return await rebuild()
     }
 
     const dynamicPointCursorBeforeBatch = state.lastDynamicPointCursor
-    const batchResult = processSolveBatch(state, deltaSolves, now, timing)
+    const batchResult = processSolveBatch(
+      state,
+      deltaSolves,
+      cutoff === undefined ? now : Math.min(now, cutoff),
+      timing
+    )
     if (batchResult.hadUnappliedSolves) {
       return await rebuild()
     }
@@ -704,7 +772,10 @@ export const createCachedLeaderboardCalculator = (redis?: TypedRedis) => {
     }
 
     state.lastDynamicPointCursor = dynamicPointCursorBeforeBatch
-    const dynamicRefresh = await refreshDynamicContribs(db, state, timing)
+    const dynamicRefresh =
+      cutoff === undefined
+        ? await refreshDynamicContribs(db, state, timing)
+        : await loadFrozenDynamicContribs(db, state, timing, cutoff)
     if (dynamicRefresh.needsRebuild) {
       return await rebuild()
     }
@@ -718,6 +789,58 @@ export const createCachedLeaderboardCalculator = (redis?: TypedRedis) => {
 }
 
 type RefreshResult = { changed: boolean; needsRebuild: boolean }
+
+const loadFrozenDynamicContribs = async (
+  db: DatabaseClient,
+  state: LeaderboardRuntimeState,
+  timing: CompetitionTiming,
+  cutoff: number
+): Promise<RefreshResult> => {
+  const dynamicIds = getDynamicChallengeIds(state)
+  if (dynamicIds.length === 0) {
+    return { changed: false, needsRebuild: false }
+  }
+
+  const totals = await db
+    .select({
+      userId: scoreEvents.userid,
+      challengeId: scoreEvents.challengeid,
+      points: sum(scoreEvents.pointsDelta).mapWith(Number),
+    })
+    .from(scoreEvents)
+    .where(
+      and(
+        inArray(scoreEvents.challengeid, dynamicIds),
+        lte(scoreEvents.eventAt, new Date(cutoff).toISOString())
+      )
+    )
+    .groupBy(scoreEvents.userid, scoreEvents.challengeid)
+
+  const frozen = new Map(
+    totals
+      .filter(
+        (row): row is typeof row & { userId: string } => row.userId !== null
+      )
+      .map(row => [`${row.userId}\0${row.challengeId}`, row.points ?? 0])
+  )
+
+  let changed = false
+  for (const user of state.userInfos.values()) {
+    for (const challengeId of user.solvedChallengeIds) {
+      if (!dynamicIds.includes(challengeId)) continue
+      const points = frozen.get(`${user.id}\0${challengeId}`) ?? 0
+      if (user.solveContribs.get(challengeId) !== points) {
+        user.solveContribs.set(challengeId, points)
+        changed = true
+      }
+    }
+  }
+
+  if (changed) {
+    recomputeScores(state, timing)
+  }
+  return { changed, needsRebuild: false }
+}
 
 const refreshDynamicContribs = async (
   db: DatabaseClient,

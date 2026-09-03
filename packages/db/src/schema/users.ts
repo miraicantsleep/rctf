@@ -31,6 +31,9 @@ export const users = pgTable(
     score: integer().notNull().default(0),
     globalRank: integer('global_rank'),
     divisionRank: integer('division_rank'),
+    frozenScore: integer('frozen_score'),
+    frozenGlobalRank: integer('frozen_global_rank'),
+    frozenDivisionRank: integer('frozen_division_rank'),
     lastSolveAt: timestamp('last_solve_at', {
       withTimezone: true,
       mode: 'string',
@@ -69,6 +72,12 @@ export const users = pgTable(
     index('users_division_leaderboard_idx')
       .using('btree', sql`division, global_rank ASC`)
       .where(sql`global_rank IS NOT NULL`),
+    index('users_frozen_global_leaderboard_idx')
+      .using('btree', sql`frozen_global_rank ASC`)
+      .where(sql`frozen_global_rank IS NOT NULL`),
+    index('users_frozen_division_leaderboard_idx')
+      .using('btree', sql`division, frozen_division_rank ASC`)
+      .where(sql`frozen_division_rank IS NOT NULL`),
   ]
 )
 

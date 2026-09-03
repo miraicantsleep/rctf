@@ -94,6 +94,7 @@
       ? validateTiming(
           form.timing.startTime,
           form.timing.endTime,
+          form.timing.freezeTime,
           !groupMatchesDefaults(form, 'timing', defaults)
         )
       : null
@@ -213,6 +214,7 @@
     const error = validateTiming(
       form.timing.startTime,
       form.timing.endTime,
+      form.timing.freezeTime,
       !groupMatchesDefaults(form, 'timing', defaults)
     )
     if (error) {
@@ -342,6 +344,25 @@
                   value={formatDatetimeLocal(settingsForm.timing.endTime)}
                   onchange={e => {
                     settingsForm.timing.endTime = parseDatetimeLocal(
+                      e.currentTarget.value
+                    )
+                    markGroup('timing')
+                  }}
+                />
+              {/snippet}
+            </Field>
+            <Field
+              label="Scoreboard freeze (local time, optional)"
+              description="Public scores stop at this time until the freeze is cleared. Staff with leaderboard access continue to see live scores."
+            >
+              {#snippet children({ id, describedBy })}
+                <Input
+                  {id}
+                  aria-describedby={describedBy}
+                  type="datetime-local"
+                  value={formatDatetimeLocal(settingsForm.timing.freezeTime)}
+                  onchange={e => {
+                    settingsForm.timing.freezeTime = parseDatetimeLocal(
                       e.currentTarget.value
                     )
                     markGroup('timing')
@@ -654,7 +675,7 @@
     gap: var(--space-s);
 
     @media (min-width: 32rem) {
-      grid-template-columns: 1fr 1fr;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
     }
   }
 

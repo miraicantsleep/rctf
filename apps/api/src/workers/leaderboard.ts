@@ -1,9 +1,15 @@
 import { config } from '@rctf/config'
 import { ADVISORY_LOCK_KEYS, createDatabase } from '@rctf/db'
 import { pino } from 'pino'
-import { cacheLeaderboardAndGraph } from '../cache/leaderboard'
+import {
+  cacheFrozenLeaderboardAndGraph,
+  cacheLeaderboardAndGraph,
+  frozenSnapshotFingerprint,
+  isFrozenSnapshotReady,
+} from '../cache/leaderboard'
 import { getMaxSolveCount } from '../services/challenges'
 import { createCachedLeaderboardCalculator } from '../services/leaderboard-calculation'
+import { getCompetitionTiming, isScoreboardFrozen } from '../services/settings'
 import {
   applyDecayPointsForAllChallenges,
   applyDecayPointsForChallenge,
@@ -20,14 +26,67 @@ import { createLeaderElection } from './leader-election'
 import { createRecomputeQueue } from './leaderboard-recompute'
 import { createLeaderboardTickRunner } from './leaderboard-runner'
 
+type FrozenTiming = Awaited<ReturnType<typeof getCompetitionTiming>> & {
+  freezeTime: number
+}
+
 const logger = pino().child({ module: 'leaderboard-worker' })
 const { db } = createDatabase(config.database.sql)
 const redis = await createRedis()
+let pendingFrozenTiming: FrozenTiming | null = null
+let cachedFrozenFingerprint: string | null = null
+let frozenCalculator: ReturnType<
+  typeof createCachedLeaderboardCalculator
+> | null = null
+let frozenCalculatorCutoff: number | null = null
+
 const tickRunner = createLeaderboardTickRunner({
   db,
   redis,
-  createCalculator: () => createCachedLeaderboardCalculator(redis),
-  cacheLeaderboardAndGraph,
+  createCalculator: () => {
+    const liveCalculator = createCachedLeaderboardCalculator(redis)
+    return async database => {
+      const result = await liveCalculator(database)
+      const timing = await getCompetitionTiming(database, redis)
+      if (!isScoreboardFrozen(timing)) {
+        pendingFrozenTiming = null
+        cachedFrozenFingerprint = null
+        return result
+      }
+
+      const fingerprint = frozenSnapshotFingerprint(timing)
+      const ready =
+        cachedFrozenFingerprint === fingerprint ||
+        (await isFrozenSnapshotReady(redis, timing))
+      pendingFrozenTiming = ready ? null : timing
+      if (ready) {
+        cachedFrozenFingerprint = fingerprint
+      } else {
+        result.changed = true
+      }
+      return result
+    }
+  },
+  cacheLeaderboardAndGraph: async (database, redisClient, data) => {
+    await cacheLeaderboardAndGraph(database, redisClient, data)
+    const timing = pendingFrozenTiming
+    if (!timing || timing.freezeTime === null) return
+
+    if (frozenCalculatorCutoff !== timing.freezeTime || !frozenCalculator) {
+      frozenCalculatorCutoff = timing.freezeTime
+      frozenCalculator = createCachedLeaderboardCalculator(redisClient, {
+        cutoff: timing.freezeTime,
+      })
+    }
+    const frozen = await frozenCalculator(database)
+    await cacheFrozenLeaderboardAndGraph(
+      database,
+      redisClient,
+      frozen.calculated,
+      timing
+    )
+    cachedFrozenFingerprint = frozenSnapshotFingerprint(timing)
+  },
   logger,
 })
 const tick = tickRunner.tick

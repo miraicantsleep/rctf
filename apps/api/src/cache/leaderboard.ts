@@ -7,14 +7,30 @@ import { challengeIsPublicSql } from '../services/challenge-queries'
 import { getCompetitionTiming } from '../services/settings'
 import type { TypedRedis } from './scripts'
 
-const keyGraphUpdate = 'graph-update'
-const keyGraphData = 'graph-data'
-const keyGraphCursor = 'graph-cursor'
-const keyGraphFingerprint = 'graph-fingerprint'
-const keyGraphSource = 'graph-source'
+type GraphKeys = {
+  update: string
+  data: string
+  cursor: string
+  fingerprint: string
+  source: string
+  dynamic: string
+}
+
+const graphKeys = (frozen: boolean): GraphKeys => {
+  const prefix = frozen ? 'frozen-' : ''
+  return {
+    update: `${prefix}graph-update`,
+    data: `${prefix}graph-data`,
+    cursor: `${prefix}graph-cursor`,
+    fingerprint: `${prefix}graph-fingerprint`,
+    source: `${prefix}graph-source`,
+    dynamic: `${prefix}dynamic-graph`,
+  }
+}
+
+export const keyFrozenSnapshotFingerprint = 'frozen-snapshot-fingerprint'
 const graphSourceEvents = 'events'
 const graphSourceSamples = 'samples'
-const keyDynamicGraph = 'dynamic-graph'
 const keyDynamicFeedVersion = 'dynamic-feed-version'
 const dynamicGraphCacheTtlSeconds = 60
 
@@ -69,7 +85,8 @@ export type CalculatedLeaderboard = {
 
 const cacheLeaderboard = async (
   db: DatabaseClient,
-  data: CalculatedLeaderboard
+  data: CalculatedLeaderboard,
+  frozen = false
 ): Promise<void> => {
   const divisionCounters = new Map<string, number>()
   const userUpdates = data.users
@@ -97,6 +114,40 @@ const cacheLeaderboard = async (
   )
 
   await db.transaction(async tx => {
+    if (frozen) {
+      await tx.execute(sql`
+        UPDATE users SET
+          frozen_score = COALESCE(resolved.score, 0),
+          frozen_global_rank = resolved.global_rank,
+          frozen_division_rank = resolved.division_rank
+        FROM (
+          SELECT u.id, vals.score, vals.global_rank, vals.division_rank
+          FROM users u
+          LEFT JOIN jsonb_to_recordset(${JSON.stringify(userUpdates)}::jsonb)
+            AS vals(id text, score int, global_rank int, division_rank int, last_solve_at timestamptz, last_tiebreak_solve_at timestamptz)
+            ON u.id = vals.id
+          WHERE u.frozen_global_rank IS NOT NULL OR vals.id IS NOT NULL
+        ) resolved
+        WHERE users.id = resolved.id
+      `)
+
+      await tx.execute(sql`
+        UPDATE challenges SET
+          frozen_score = COALESCE(resolved.score, 0),
+          frozen_solve_count = COALESCE(resolved.solve_count, 0)
+        FROM (
+          SELECT c.id, vals.score, vals.solve_count
+          FROM challenges c
+          LEFT JOIN jsonb_to_recordset(${JSON.stringify(challengeUpdates)}::jsonb)
+            AS vals(id text, score int, solve_count int)
+            ON c.id = vals.id
+          WHERE c.frozen_score IS NOT NULL OR vals.id IS NOT NULL
+        ) resolved
+        WHERE challenges.id = resolved.id
+      `)
+      return
+    }
+
     await tx.execute(sql`
       UPDATE users SET
         score = COALESCE(resolved.score, 0),
@@ -253,7 +304,8 @@ const getScoreEventGraphRows = async (
   db: DatabaseClient,
   userIds: string[],
   challengeIds: string[],
-  cursor: ScoreEventGraphCursor | null = null
+  cursor: ScoreEventGraphCursor | null = null,
+  cutoff?: number
 ): Promise<ScoreEventGraphRow[]> => {
   const rows = await db
     .select({
@@ -267,7 +319,10 @@ const getScoreEventGraphRows = async (
       and(
         inJsonbArray(scoreEvents.userid, userIds),
         inArray(scoreEvents.challengeid, challengeIds),
-        cursor ? gte(scoreEvents.eventAt, cursor.time) : undefined
+        cursor ? gte(scoreEvents.eventAt, cursor.time) : undefined,
+        cutoff === undefined
+          ? undefined
+          : sql`${scoreEvents.eventAt} <= ${new Date(cutoff).toISOString()}`
       )
     )
     .orderBy(asc(scoreEvents.eventAt), asc(scoreEvents.id))
@@ -284,7 +339,8 @@ const getScoreEventGraphRows = async (
 
 const loadGraphSeed = async (
   redis: TypedRedis,
-  rows: ScoreEventGraphRow[]
+  rows: ScoreEventGraphRow[],
+  keys: GraphKeys
 ): Promise<Map<string, string[]>> => {
   const userIds = Array.from(
     new Set(rows.map(row => row.userid).filter((id): id is string => !!id))
@@ -293,7 +349,7 @@ const loadGraphSeed = async (
     return new Map()
   }
 
-  const packed = await redis.hmget(keyGraphData, userIds)
+  const packed = await redis.hmget(keys.data, userIds)
   const seed = new Map<string, string[]>()
   userIds.forEach((id, idx) => {
     const points = packed[idx]
@@ -315,14 +371,15 @@ const writeGraph = (
   fold: GraphFold,
   fingerprint: string,
   cursor: ScoreEventGraphCursor | null,
-  source: GraphSource
+  source: GraphSource,
+  keys: GraphKeys
 ): Promise<void> =>
   redis[command](
-    keyGraphUpdate,
-    keyGraphData,
-    keyGraphFingerprint,
-    keyGraphCursor,
-    keyGraphSource,
+    keys.update,
+    keys.data,
+    keys.fingerprint,
+    keys.cursor,
+    keys.source,
     fold.lastSample.toString(),
     fingerprint,
     cursor ? JSON.stringify(cursor) : '',
@@ -332,12 +389,13 @@ const writeGraph = (
 
 const loadIncrementalCursor = async (
   redis: TypedRedis,
-  fingerprint: string
+  fingerprint: string,
+  keys: GraphKeys
 ): Promise<ScoreEventGraphCursor | null> => {
   const [cachedFingerprint, cachedSource, cachedCursor] = await Promise.all([
-    redis.get(keyGraphFingerprint),
-    redis.get(keyGraphSource),
-    redis.get(keyGraphCursor),
+    redis.get(keys.fingerprint),
+    redis.get(keys.source),
+    redis.get(keys.cursor),
   ])
   if (
     cachedFingerprint !== fingerprint ||
@@ -360,51 +418,72 @@ const cacheGraphIncremental = async (
   challengeIds: string[],
   fingerprint: string,
   cursor: ScoreEventGraphCursor,
-  endTime: number
+  endTime: number,
+  keys: GraphKeys,
+  cutoff?: number
 ): Promise<void> => {
-  const rows = await getScoreEventGraphRows(db, userIds, challengeIds, cursor)
+  const rows = await getScoreEventGraphRows(
+    db,
+    userIds,
+    challengeIds,
+    cursor,
+    cutoff
+  )
   if (rows.length === 0) {
     // no new events since the cursor: bump freshness only, cursor/fingerprint/source stay valid
-    const stored = Number.parseInt((await redis.get(keyGraphUpdate)) ?? '0')
+    const stored = Number.parseInt((await redis.get(keys.update)) ?? '0')
     await redis.set(
-      keyGraphUpdate,
+      keys.update,
       Math.max(stored || 0, graphNow(endTime)).toString()
     )
     return
   }
 
-  const seed = await loadGraphSeed(redis, rows)
+  const seed = await loadGraphSeed(redis, rows, keys)
   await writeGraph(
     redis,
     'rctfMergeGraph',
     foldScoreEvents(rows, endTime, seed),
     fingerprint,
     buildGraphCursor(rows, cursor),
-    graphSourceEvents
+    graphSourceEvents,
+    keys
   )
 }
 
 const cacheGraph = async (
   db: DatabaseClient,
   redis: TypedRedis,
-  data: CalculatedLeaderboard
+  data: CalculatedLeaderboard,
+  frozen = false,
+  cutoff?: number
 ): Promise<void> => {
   const { endTime } = await getCompetitionTiming(db, redis)
+  const graphEndTime = cutoff ?? endTime
+  const keys = graphKeys(frozen)
   const userIds = data.users.filter(u => u.hadAnySolve).map(u => u.id)
   const challengeIds = Array.from(data.challengeInfos.keys())
-  const fingerprint = buildGraphFingerprint(userIds, challengeIds, endTime)
+  const fingerprint = buildGraphFingerprint(userIds, challengeIds, graphEndTime)
   const replaceGraph = (
     fold: GraphFold,
     cursor: ScoreEventGraphCursor | null,
     source: GraphSource
   ): Promise<void> =>
-    writeGraph(redis, 'rctfReplaceGraph', fold, fingerprint, cursor, source)
+    writeGraph(
+      redis,
+      'rctfReplaceGraph',
+      fold,
+      fingerprint,
+      cursor,
+      source,
+      keys
+    )
 
   if (userIds.length === 0 || challengeIds.length === 0) {
-    return replaceGraph(emptyFold(endTime), null, graphSourceEvents)
+    return replaceGraph(emptyFold(graphEndTime), null, graphSourceEvents)
   }
 
-  const cursor = await loadIncrementalCursor(redis, fingerprint)
+  const cursor = await loadIncrementalCursor(redis, fingerprint, keys)
   if (cursor) {
     return cacheGraphIncremental(
       db,
@@ -413,26 +492,34 @@ const cacheGraph = async (
       challengeIds,
       fingerprint,
       cursor,
-      endTime
+      graphEndTime,
+      keys,
+      cutoff
     )
   }
 
-  const rows = await getScoreEventGraphRows(db, userIds, challengeIds)
+  const rows = await getScoreEventGraphRows(
+    db,
+    userIds,
+    challengeIds,
+    null,
+    cutoff
+  )
   if (rows.length > 0) {
     return replaceGraph(
-      foldScoreEvents(rows, endTime),
+      foldScoreEvents(rows, graphEndTime),
       buildGraphCursor(rows),
       graphSourceEvents
     )
   }
   if (data.samples.length > 0) {
     return replaceGraph(
-      buildGraphFromSamples(data, endTime),
+      buildGraphFromSamples(data, graphEndTime),
       null,
       graphSourceSamples
     )
   }
-  return replaceGraph(emptyFold(endTime), null, graphSourceEvents)
+  return replaceGraph(emptyFold(graphEndTime), null, graphSourceEvents)
 }
 
 interface GraphPoint {
@@ -486,10 +573,12 @@ export const bumpDynamicFeedVersion = async (
 
 const dynamicGraphCacheKey = (
   feedVersion: string,
-  userIds: string[]
+  userIds: string[],
+  keys: GraphKeys,
+  cutoff?: number
 ): string => {
   const digest = Bun.hash([...userIds].sort().join(',')).toString(36)
-  return `${keyDynamicGraph}:${feedVersion}:${digest}`
+  return `${keys.dynamic}:${feedVersion}:${cutoff ?? 'live'}:${digest}`
 }
 
 const deserializeDynamicPoints = (
@@ -511,14 +600,16 @@ const getDynamicGraphPoints = async (
   lastUpdate: number,
   feedVersion: string,
   entries: Array<GraphSourceEntry>,
-  endTime: number
+  endTime: number,
+  keys: GraphKeys,
+  cutoff?: number
 ): Promise<Map<string, Array<GraphPoint>>> => {
   const userIds = entries.map(entry => entry.id)
   if (userIds.length === 0) {
     return new Map()
   }
 
-  const cacheKey = dynamicGraphCacheKey(feedVersion, userIds)
+  const cacheKey = dynamicGraphCacheKey(feedVersion, userIds, keys, cutoff)
   const cached = deserializeDynamicPoints(await redis.get(cacheKey))
   if (cached) {
     return cached
@@ -539,7 +630,10 @@ const getDynamicGraphPoints = async (
     .where(
       and(
         inJsonbArray(scoreEvents.userid, userIds),
-        eq(scoreEvents.source, 'feed')
+        eq(scoreEvents.source, 'feed'),
+        cutoff === undefined
+          ? undefined
+          : sql`${scoreEvents.eventAt} <= ${new Date(cutoff).toISOString()}`
       )
     )
     .orderBy(asc(scoreEvents.eventAt), asc(scoreEvents.id))
@@ -569,17 +663,19 @@ const getDynamicGraphPoints = async (
 export const getGraphForEntries = async (
   db: DatabaseClient,
   redis: TypedRedis,
-  entries: Array<GraphSourceEntry>
+  entries: Array<GraphSourceEntry>,
+  options: { frozen?: boolean; cutoff?: number; ready?: boolean } = {}
 ): Promise<Array<GraphEntry>> => {
-  if (entries.length === 0) {
+  if (entries.length === 0 || (options.frozen && options.ready === false)) {
     return []
   }
 
+  const keys = graphKeys(options.frozen === true)
   const [lastUpdateRaw, feedVersion, graphData, timing] = await Promise.all([
-    redis.get(keyGraphUpdate),
+    redis.get(keys.update),
     redis.get(keyDynamicFeedVersion),
     redis.hmget(
-      keyGraphData,
+      keys.data,
       entries.map(entry => entry.id)
     ),
     getCompetitionTiming(db, redis),
@@ -591,7 +687,9 @@ export const getGraphForEntries = async (
     lastUpdate,
     feedVersion ?? '0',
     entries,
-    timing.endTime
+    options.cutoff ?? timing.endTime,
+    keys,
+    options.cutoff
   )
 
   return entries.map((entry, idx) => ({
@@ -605,31 +703,48 @@ export const getGraphForEntries = async (
 export const userIsRankedSql = sql`${users.globalRank} IS NOT NULL`
 export const userIsPublicRankedSql = sql`${userIsRankedSql} AND ${users.banned} = false`
 export const leaderboardOrderSql = sql`${users.globalRank} ASC`
+export const userIsFrozenRankedSql = sql`${users.frozenGlobalRank} IS NOT NULL`
+export const userIsPublicFrozenRankedSql = sql`${userIsFrozenRankedSql} AND ${users.banned} = false`
+export const frozenLeaderboardOrderSql = sql`${users.frozenGlobalRank} ASC`
 
 export const getGraph = async (
   db: DatabaseClient,
   redis: TypedRedis,
   limit: number,
   offset: number,
-  division?: string
+  division?: string,
+  options: { frozen?: boolean; cutoff?: number; ready?: boolean } = {}
 ): Promise<Array<GraphEntry>> => {
+  if (options.frozen && options.ready === false) {
+    return []
+  }
+
+  const frozen = options.frozen === true
+  const rankedFilter = frozen
+    ? userIsPublicFrozenRankedSql
+    : userIsPublicRankedSql
   const topUsers = await db
     .select({
       id: users.id,
       name: users.name,
-      score: users.score,
+      score: frozen ? users.frozenScore : users.score,
     })
     .from(users)
     .where(
       division
-        ? sql`${userIsPublicRankedSql} AND ${users.division} = ${division}`
-        : userIsPublicRankedSql
+        ? sql`${rankedFilter} AND ${users.division} = ${division}`
+        : rankedFilter
     )
-    .orderBy(leaderboardOrderSql)
+    .orderBy(frozen ? frozenLeaderboardOrderSql : leaderboardOrderSql)
     .limit(limit)
     .offset(offset)
 
-  return getGraphForEntries(db, redis, topUsers)
+  return getGraphForEntries(
+    db,
+    redis,
+    topUsers.map(user => ({ ...user, score: user.score ?? 0 })),
+    options
+  )
 }
 
 export const cacheLeaderboardAndGraph = async (
@@ -638,4 +753,39 @@ export const cacheLeaderboardAndGraph = async (
   data: CalculatedLeaderboard
 ): Promise<void> => {
   await Promise.all([cacheLeaderboard(db, data), cacheGraph(db, redis, data)])
+}
+
+export const frozenSnapshotFingerprint = (timing: {
+  startTime: number
+  endTime: number
+  freezeTime: number
+}): string => `${timing.startTime}:${timing.endTime}:${timing.freezeTime}`
+
+export const isFrozenSnapshotReady = async (
+  redis: TypedRedis,
+  timing: { startTime: number; endTime: number; freezeTime: number }
+): Promise<boolean> =>
+  (await redis.get(keyFrozenSnapshotFingerprint)) ===
+  frozenSnapshotFingerprint(timing)
+
+export const invalidateFrozenSnapshot = async (
+  redis: TypedRedis
+): Promise<void> => {
+  await redis.del(keyFrozenSnapshotFingerprint)
+}
+
+export const cacheFrozenLeaderboardAndGraph = async (
+  db: DatabaseClient,
+  redis: TypedRedis,
+  data: CalculatedLeaderboard,
+  timing: { startTime: number; endTime: number; freezeTime: number }
+): Promise<void> => {
+  await Promise.all([
+    cacheLeaderboard(db, data, true),
+    cacheGraph(db, redis, data, true, timing.freezeTime),
+  ])
+  await redis.set(
+    keyFrozenSnapshotFingerprint,
+    frozenSnapshotFingerprint(timing)
+  )
 }

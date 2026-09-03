@@ -17,3 +17,4 @@ export const scoringKindOf = (data: {
 }): ChallengeScoringKind => data.scoring?.kind ?? ChallengeScoringKind.DECAY
 
 export const isDecayKind = sql`COALESCE(${challenges.data} -> 'scoring' ->> 'kind', ${ChallengeScoringKind.DECAY}) = ${ChallengeScoringKind.DECAY}`
+export const isDynamicKind = sql`${challenges.data} -> 'scoring' ->> 'kind' = ${ChallengeScoringKind.DYNAMIC}`
