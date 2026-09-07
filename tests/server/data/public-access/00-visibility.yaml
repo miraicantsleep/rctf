@@ -1,0 +1,3 @@
+# Require sign-in to view the scoreboard and challenges.
+hideScoreboard: true
+hideChallenges: true

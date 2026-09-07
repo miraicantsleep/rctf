@@ -37,10 +37,11 @@ import {
 import { UserEmail, UserName } from '../../util'
 
 export const GetUserRoute = defineRoute({
+  publicAccess: ['scoreboard', 'challenges'],
   path: '/v1/users/:id',
   method: 'GET',
   goodResponses: [GoodUserData],
-  badResponses: [BadUnknownUser, BadNotStarted],
+  badResponses: [BadUnknownUser, BadNotStarted, BadToken],
   authRequired: false,
   optionalAuth: true,
   params: z.object({

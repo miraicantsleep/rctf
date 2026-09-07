@@ -70,14 +70,14 @@
         activePath: '/challenges',
         label: 'Challenges',
         icon: IconFlagBannerFold,
-        show: true,
+        show: !!user || !clientConfig?.hideChallenges,
       },
       {
         href: '/scores',
         activePath: '/scores',
         label: 'Scoreboard',
         icon: IconGlobeHemisphereWest,
-        show: true,
+        show: !!user || !clientConfig?.hideScoreboard,
       },
       {
         href: '/profile',

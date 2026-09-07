@@ -2,6 +2,7 @@ import { z } from 'zod/mini'
 import { Permissions } from '../../enums'
 import { defineRoute } from '../../internal'
 import {
+  BadToken,
   BadBody,
   BadNotStarted,
   BadRateLimit,
@@ -12,10 +13,11 @@ import {
 } from '../../responses'
 
 export const GetLeaderboardRouteV2 = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v2/leaderboard/now',
   method: 'GET',
   goodResponses: [GoodLeaderboardV2],
-  badResponses: [BadNotStarted, BadBody, BadRateLimit],
+  badResponses: [BadNotStarted, BadBody, BadRateLimit, BadToken],
   authRequired: false,
   optionalAuth: true,
   query: z.object({
@@ -48,10 +50,11 @@ export const GetLeaderboardRouteV2 = defineRoute({
 })
 
 export const GetLeaderboardChallengesRouteV2 = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v2/leaderboard/challs',
   method: 'GET',
   goodResponses: [GoodLeaderboardChallengesV2],
-  badResponses: [BadNotStarted],
+  badResponses: [BadNotStarted, BadToken],
   authRequired: false,
   optionalAuth: true,
   onlyWhenStarted: true,
@@ -59,10 +62,11 @@ export const GetLeaderboardChallengesRouteV2 = defineRoute({
 })
 
 export const GetLeaderboardGraphRouteV2 = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v2/leaderboard/graph',
   method: 'GET',
   goodResponses: [GoodLeaderboardGraph],
-  badResponses: [BadNotStarted, BadBody],
+  badResponses: [BadNotStarted, BadBody, BadToken],
   authRequired: false,
   optionalAuth: true,
   query: z.object({
@@ -88,10 +92,11 @@ export const GetLeaderboardGraphRouteV2 = defineRoute({
 })
 
 export const GetLeaderboardWithGraphRoute = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v2/leaderboard/with-graph',
   method: 'GET',
   goodResponses: [GoodLeaderboardWithGraph],
-  badResponses: [BadNotStarted, BadBody, BadRateLimit],
+  badResponses: [BadNotStarted, BadBody, BadRateLimit, BadToken],
   authRequired: false,
   optionalAuth: true,
   query: z.object({

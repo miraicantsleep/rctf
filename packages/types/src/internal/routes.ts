@@ -18,6 +18,7 @@ export interface RouteConfig {
   badResponses?: ResponseCollection
   authRequired?: boolean
   optionalAuth?: boolean
+  publicAccess?: readonly ('scoreboard' | 'challenges')[]
   body?: Schema
   params?: Schema
   query?: Schema
@@ -47,6 +48,7 @@ export interface RouteDefinition<T extends RouteConfig = RouteConfig> {
     ? T['optionalAuth']
     : false
   readonly params: T['params']
+  readonly publicAccess: T['publicAccess']
   readonly query: T['query']
   readonly permissions: T['permissions']
   readonly onlyWhenStarted: T['onlyWhenStarted'] extends boolean
@@ -84,6 +86,7 @@ export function defineRoute<const T extends RouteConfig>(
     optionalAuth: (config.optionalAuth ??
       false) as RouteDefinition<T>['optionalAuth'],
     params: config.params,
+    publicAccess: config.publicAccess,
     query: config.query,
     permissions: config.permissions,
     onlyWhenStarted: (config.onlyWhenStarted ??

@@ -59,6 +59,10 @@ rCTF requires [Bun v1.0+](https://bun.sh/).
    startTime: 0
    endTime: 99999999999999
 
+   # Require sign-in to view these pages (optional, defaults to false).
+   hideScoreboard: false
+   hideChallenges: false
+
    database:
      sql:
        host: 127.0.0.1

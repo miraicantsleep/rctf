@@ -1,3 +1,4 @@
+import { config } from '@rctf/config'
 import { challenges, type DatabaseClient } from '@rctf/db'
 import { GetLeaderboardChallengesRouteV2 } from '@rctf/types'
 import { sql } from 'drizzle-orm'
@@ -44,6 +45,9 @@ const getLeaderboardChallenges = async (
 leaderboardGroup.route(
   GetLeaderboardChallengesRouteV2,
   async ({ ctx, user, res }) => {
+    if (!user && config.hideChallenges) {
+      return res.goodLeaderboardChallengesV2({ challenges: {} })
+    }
     const view = await getScoreboardView(ctx.var.db, ctx.var.redis, user)
     const rows = await getLeaderboardChallenges(ctx.var.db, view)
 

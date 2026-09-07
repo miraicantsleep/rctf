@@ -8,6 +8,8 @@ export const GoodClientConfigV2 = response('goodClientConfigV2', {
   status: 200,
   message: 'The client config was retrieved.',
   data: z.object({
+    hideScoreboard: z.boolean(),
+    hideChallenges: z.boolean(),
     meta: z.object({
       description: example(z.string(), 'A jeopardy-style CTF.').check(
         z.describe('Meta description used for link previews.')

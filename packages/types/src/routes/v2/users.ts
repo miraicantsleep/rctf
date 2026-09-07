@@ -28,10 +28,11 @@ import {
 import { FileFieldSchema, UserEmail, UserName } from '../../util'
 
 export const GetUserRouteV2 = defineRoute({
+  publicAccess: ['scoreboard', 'challenges'],
   path: '/v2/users/:id',
   method: 'GET',
   goodResponses: [GoodUserDataV2],
-  badResponses: [BadUnknownUser, BadNotStarted],
+  badResponses: [BadUnknownUser, BadNotStarted, BadToken],
   authRequired: false,
   optionalAuth: true,
   params: z.object({

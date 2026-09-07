@@ -7,6 +7,8 @@ integrationsGroup.route(GetClientConfigRoute, async ({ res, ctx }) => {
   const resolved = await getResolvedSettings(ctx.var.db, ctx.var.redis)
   return res.goodClientConfig({
     ...resolved,
+    hideScoreboard: config.hideScoreboard,
+    hideChallenges: config.hideChallenges,
     sponsors: resolved.sponsors.map(sponsor => ({
       name: sponsor.name,
       icon: sponsor.icon || sponsor.iconLight || sponsor.iconDark || '',

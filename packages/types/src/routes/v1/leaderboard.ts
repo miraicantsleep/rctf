@@ -2,6 +2,7 @@ import { z } from 'zod/mini'
 import { Permissions } from '../../enums'
 import { defineRoute } from '../../internal'
 import {
+  BadToken,
   BadBody,
   BadNotStarted,
   GoodLeaderboard,
@@ -9,10 +10,11 @@ import {
 } from '../../responses'
 
 export const GetLeaderboardRoute = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v1/leaderboard/now',
   method: 'GET',
   goodResponses: [GoodLeaderboard],
-  badResponses: [BadNotStarted, BadBody],
+  badResponses: [BadNotStarted, BadBody, BadToken],
   authRequired: false,
   optionalAuth: true,
   query: z.object({
@@ -38,10 +40,11 @@ export const GetLeaderboardRoute = defineRoute({
 })
 
 export const GetLeaderboardGraphRoute = defineRoute({
+  publicAccess: ['scoreboard'],
   path: '/v1/leaderboard/graph',
   method: 'GET',
   goodResponses: [GoodLeaderboardGraph],
-  badResponses: [BadNotStarted, BadBody],
+  badResponses: [BadNotStarted, BadBody, BadToken],
   authRequired: false,
   optionalAuth: true,
   query: z.object({

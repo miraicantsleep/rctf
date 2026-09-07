@@ -83,6 +83,10 @@ export const ServerConfigSchema = z.object({
   endTime: z.number(), // unix ms
   freezeTime: z.optional(z.number()), // unix ms
 
+  // Public access (signed-in teams retain access)
+  hideScoreboard: z._default(z.boolean(), false),
+  hideChallenges: z._default(z.boolean(), false),
+
   // Divisions
   divisions: z._default(z.record(z.string(), z.string()), { open: 'Open' }), // id -> display name
   defaultDivision: z.optional(z.string()),

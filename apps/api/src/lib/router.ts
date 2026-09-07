@@ -1,3 +1,4 @@
+import { config } from '@rctf/config'
 import type { User } from '@rctf/db'
 import type {
   AnyRouteDefinition,
@@ -251,6 +252,7 @@ export const declareRouter = <
       definition.authRequired || (definition.permissions ?? 0) !== 0
     const wantsOptionalAuth =
       definition.optionalAuth === true ||
+      definition.publicAccess !== undefined ||
       definition.onlyWhenStartedPermissionsBypass !== undefined
 
     if (requiresAuth) {
@@ -271,6 +273,17 @@ export const declareRouter = <
       }
     } else if (wantsOptionalAuth) {
       user = await getAuthenticatedUser(context)
+    }
+
+    if (!user && definition.publicAccess?.length) {
+      if (
+        (definition.publicAccess.includes('scoreboard') &&
+          config.hideScoreboard) ||
+        (definition.publicAccess.includes('challenges') &&
+          config.hideChallenges)
+      ) {
+        return context.json(...respond.unauthorized())
+      }
     }
 
     if (

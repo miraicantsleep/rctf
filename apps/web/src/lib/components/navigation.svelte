@@ -141,30 +141,34 @@
           />
         {/snippet}
       </Tooltip>
-      <Tooltip label="Challenges">
-        {#snippet children({ props })}
-          <NavigationButton
-            {...props}
-            data-roving
-            href="/challenges"
-            activePath="/challenges"
-            label="Challenges"
-            icon={IconFlagBannerFold}
-          />
-        {/snippet}
-      </Tooltip>
-      <Tooltip label="Scoreboard">
-        {#snippet children({ props })}
-          <NavigationButton
-            {...props}
-            data-roving
-            href="/scores"
-            activePath="/scores"
-            label="Scoreboard"
-            icon={IconGlobeHemisphereWest}
-          />
-        {/snippet}
-      </Tooltip>
+      {#if user || !clientConfig?.hideChallenges}
+        <Tooltip label="Challenges">
+          {#snippet children({ props })}
+            <NavigationButton
+              {...props}
+              data-roving
+              href="/challenges"
+              activePath="/challenges"
+              label="Challenges"
+              icon={IconFlagBannerFold}
+            />
+          {/snippet}
+        </Tooltip>
+      {/if}
+      {#if user || !clientConfig?.hideScoreboard}
+        <Tooltip label="Scoreboard">
+          {#snippet children({ props })}
+            <NavigationButton
+              {...props}
+              data-roving
+              href="/scores"
+              activePath="/scores"
+              label="Scoreboard"
+              icon={IconGlobeHemisphereWest}
+            />
+          {/snippet}
+        </Tooltip>
+      {/if}
       {#if isAdmin}
         <Tooltip label="Admin">
           {#snippet children({ props: tooltipProps })}

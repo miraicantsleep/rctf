@@ -189,6 +189,22 @@ freezeTime: 1735754400000 # Optional: January 1, 2025 19:00 UTC
 To convert a date to Unix milliseconds: `$ <red>date</red> <dim>-d</dim> <green>"2025-01-01T00:00:00Z"</green> +%s000` or use `new Date('2025-01-01T00:00:00Z').getTime(){:ts}` in JavaScript.
 :::
 
+### Public access
+
+Set these options in your `rctf.d/01-base.yaml` configuration file:
+
+```yaml
+hideScoreboard: false
+hideChallenges: false
+```
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `<red>hideScoreboard</red>` | `boolean{:ts}` | `false{:ts}` | Require sign-in to view the scoreboard, graphs, and per-challenge team rankings. |
+| `<red>hideChallenges</red>` | `boolean{:ts}` | `false{:ts}` | Require sign-in to view challenges and remove their names and categories from the public scoreboard. |
+
+These are file-based configuration options. Restart rCTF after changing them. Signed-in teams and staff retain access. Team profiles and challenge solve lists require sign-in when either option is enabled. Both API versions enforce these restrictions. The CTFtime export keeps its existing requirement for a token with `leaderboardRead` permission.
+
 ### Divisions
 
 ```yaml

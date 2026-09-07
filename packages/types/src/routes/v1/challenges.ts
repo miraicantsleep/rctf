@@ -18,10 +18,11 @@ import {
 } from '../../responses'
 
 export const GetChallengesRoute = defineRoute({
+  publicAccess: ['challenges'],
   path: '/v1/challs',
   method: 'GET',
   goodResponses: [GoodChallenges],
-  badResponses: [BadNotStarted],
+  badResponses: [BadNotStarted, BadToken],
   authRequired: false,
   optionalAuth: true,
   onlyWhenStarted: true,
@@ -59,10 +60,11 @@ export const SubmitFlagRoute = defineRoute({
 })
 
 export const GetChallengeSolvesRoute = defineRoute({
+  publicAccess: ['scoreboard', 'challenges'],
   path: '/v1/challs/:id/solves',
   method: 'GET',
   goodResponses: [GoodChallengeSolves],
-  badResponses: [BadNotStarted, BadChallenge, BadBody],
+  badResponses: [BadNotStarted, BadChallenge, BadBody, BadToken],
   authRequired: false,
   optionalAuth: true,
   params: z.object({
