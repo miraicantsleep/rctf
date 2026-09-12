@@ -1191,7 +1191,10 @@ export const getLeaderboardChallengeData = async (
           .select({
             userId: solves.userid,
             challengeId: solves.challengeid,
-            solveTime: sql<number>`(EXTRACT(EPOCH FROM ${solves.createdat}) * 1000)::bigint`,
+            solveTime:
+              sql<number>`(EXTRACT(EPOCH FROM ${solves.createdat}) * 1000)::bigint`.mapWith(
+                Number
+              ),
           })
           .from(solves)
           .innerJoin(users, nonBannedUserJoin(solves.userid))

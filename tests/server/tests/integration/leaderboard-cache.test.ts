@@ -25,7 +25,10 @@ import {
   isFrozenSnapshotReady,
 } from '../../../../apps/api/src/cache/leaderboard'
 import { scoreProvider } from '../../../../apps/api/src/providers/instances/score'
-import { getDynamicScoresForUsers } from '../../../../apps/api/src/services/challenges'
+import {
+  getDynamicScoresForUsers,
+  getLeaderboardChallengeData,
+} from '../../../../apps/api/src/services/challenges'
 import {
   calculateLeaderboard,
   createCachedLeaderboardCalculator,
@@ -227,6 +230,16 @@ describe('frozen leaderboard cutoff', () => {
     expect(frozen.users.some(user => user.id === before.id)).toBe(true)
     expect(frozen.users.some(user => user.id === after.id)).toBe(false)
     expect(frozen.challengeInfos.get(challenge.id)?.solves).toBe(1)
+
+    const details = await getLeaderboardChallengeData(
+      db,
+      [before.id, after.id],
+      T1
+    )
+    expect(details.solves.get(before.id)).toEqual([
+      { challengeId: challenge.id, solveTime: T0 },
+    ])
+    expect(details.solves.has(after.id)).toBe(false)
 
     const redis = await createRedis()
     const timing = {
