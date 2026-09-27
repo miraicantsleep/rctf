@@ -201,7 +201,7 @@ hideChallenges: false
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `<red>hideScoreboard</red>` | `boolean{:ts}` | `false{:ts}` | Require sign-in to view the scoreboard, graphs, and per-challenge team rankings. |
-| `<red>hideChallenges</red>` | `boolean{:ts}` | `false{:ts}` | Require sign-in to view challenges and remove their names and categories from the public scoreboard. |
+| `<red>hideChallenges</red>` | `boolean{:ts}` | `false{:ts}` | Require sign-in to view challenge content. The public scoreboard still shows released challenge names, categories, points, and solve statistics. |
 
 These are file-based configuration options. Restart rCTF after changing them. Signed-in teams and staff retain access. Team profiles and challenge solve lists require sign-in when either option is enabled. Both API versions enforce these restrictions. The CTFtime export keeps its existing requirement for a token with `leaderboardRead` permission.
 

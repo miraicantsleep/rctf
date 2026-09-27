@@ -1,6 +1,7 @@
 services:
   rctf:
-    image: ghcr.io/otter-sec/rctf:${RCTF_GIT_REF}
+    image: rctf
+    pull_policy: never
     build:
       context: .
       dockerfile: deploy/rctf/Dockerfile

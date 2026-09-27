@@ -22,10 +22,12 @@
     data: ScoresData
     urlState: ScoresUrlState
     divisions: Record<string, string>
+    challengesRequireSignIn: boolean
     onScreenshot: () => void
   }
 
-  let { data, urlState, divisions, onScreenshot }: Props = $props()
+  let { data, urlState, divisions, challengesRequireSignIn, onScreenshot }: Props =
+    $props()
 
   const focusedChallenge = $derived.by(() => {
     const id = urlState.focusedChallengeId
@@ -141,10 +143,17 @@
     {#if focusedChallenge}
       <filter-chip data-category-color={focusedChallenge.color}>
         <span data-label>Filtering by</span>
-        <a href="/challenges?challenge={focusedChallenge.id}">
-          <focusedChallenge.icon aria-hidden="true" />
-          <span>{focusedChallenge.name}</span>
-        </a>
+        {#if challengesRequireSignIn}
+          <span data-challenge-name>
+            <focusedChallenge.icon aria-hidden="true" />
+            <span>{focusedChallenge.name}</span>
+          </span>
+        {:else}
+          <a href="/challenges?challenge={focusedChallenge.id}">
+            <focusedChallenge.icon aria-hidden="true" />
+            <span>{focusedChallenge.name}</span>
+          </a>
+        {/if}
         <button
           type="button"
           data-clear
@@ -306,21 +315,14 @@
       font-size: var(--step--1);
     }
 
-    a {
+    a,
+    span[data-challenge-name] {
       display: flex;
       align-items: center;
       gap: 0.25rem;
       min-inline-size: 0;
       color: var(--category-foreground-l1);
       font-size: var(--step--1);
-      text-decoration: underline;
-      text-decoration-color: color-mix(in oklab, currentColor 50%, transparent);
-      text-underline-offset: 2px;
-      transition: text-decoration-color 150ms ease;
-
-      &:hover {
-        text-decoration-color: currentColor;
-      }
 
       span {
         overflow: hidden;
@@ -331,6 +333,17 @@
       :global(svg) {
         flex-shrink: 0;
         font-size: 1rem;
+      }
+    }
+
+    a {
+      text-decoration: underline;
+      text-decoration-color: color-mix(in oklab, currentColor 50%, transparent);
+      text-underline-offset: 2px;
+      transition: text-decoration-color 150ms ease;
+
+      &:hover {
+        text-decoration-color: currentColor;
       }
     }
 

@@ -100,8 +100,9 @@ do_install() {
 
   info "Downloading rCTF..."
 
-  curl -fsSO "https://raw.githubusercontent.com/otter-sec/rctf/$RCTF_GIT_REF/compose.yml"
-  docker compose pull
+  curl -fsSL "https://api.github.com/repos/miraicantsleep/rctf/tarball/$RCTF_GIT_REF" | tar -xz --strip-components=1
+  docker compose build rctf
+  docker compose pull redis postgres
 
   info "Finished installation to ${RCTF_INSTALL_PATH}."
 

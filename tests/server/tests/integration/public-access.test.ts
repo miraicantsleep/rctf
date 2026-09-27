@@ -135,11 +135,16 @@ describe('file-based public access', () => {
         if (!hideScoreboard) {
           const response = await request(app, '/api/v2/leaderboard/challs', {})
           const body = await response.json()
-          if (hideChallenges) expect(body.data.challenges).toEqual({})
-          else
-            expect(body.data.challenges[challenge.challenge.id].name).toBe(
-              challenge.challenge.name
-            )
+          expect(body.data.challenges[challenge.challenge.id]).toMatchObject({
+            name: challenge.challenge.name,
+            category: challenge.challenge.category,
+          })
+          expect(body.data.challenges[challenge.challenge.id]).not.toHaveProperty(
+            'description'
+          )
+          expect(body.data.challenges[challenge.challenge.id]).not.toHaveProperty(
+            'flags'
+          )
         }
         const selfResponse = await request(app, '/api/v2/users/me', {
           headers: teamHeaders,

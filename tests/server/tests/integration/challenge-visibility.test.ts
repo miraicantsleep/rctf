@@ -315,6 +315,23 @@ describe('challenge visibility filtering', () => {
   })
 
   describe('leaderboard excludes non-public challenges', () => {
+    test('public leaderboard metadata excludes hidden and unreleased challenges', async () => {
+      const visible = await insertChallenge({})
+      const hidden = await insertChallenge({ hidden: true })
+      const unreleased = await insertChallenge({
+        releaseTime: Date.now() + 60 * 60 * 1000,
+      })
+
+      const response = await request(app, '/api/v2/leaderboard/challs', {
+        method: 'GET',
+      })
+      expect(response.status).toBe(200)
+      const body = await response.json()
+      expect(body.data.challenges).toHaveProperty(visible.id)
+      expect(body.data.challenges).not.toHaveProperty(hidden.id)
+      expect(body.data.challenges).not.toHaveProperty(unreleased.id)
+    })
+
     test('hidden challenge is excluded from leaderboard calculation', async () => {
       const { user, cleanup } = await generateRealTestUser()
       cleanups.push(cleanup)

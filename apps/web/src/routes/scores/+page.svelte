@@ -35,6 +35,9 @@
     showSelfContext: () => urlState.showSelfContext,
   })
 
+  const challengesRequireSignIn = $derived(
+    !data.currentUser && (configQuery.data?.hideChallenges ?? false)
+  )
   const isFrozen = $derived(freezeTime !== null && now >= freezeTime)
   const seesLiveScoreboard = $derived(
     hasPermissions(data.currentUser, Permissions.leaderboardRead)
@@ -75,6 +78,7 @@
       {data}
       {urlState}
       {divisions}
+      {challengesRequireSignIn}
       onScreenshot={() => (screenshotOpen = true)}
     />
 
