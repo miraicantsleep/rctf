@@ -140,7 +140,9 @@ const createRankedSolvesForChallenges = (
         userDivision:
           cutoff === undefined
             ? users.division
-            : sql<string>`COALESCE(${users.frozenDivision}, ${users.division})`,
+            : sql<string>`COALESCE(${users.frozenDivision}, ${users.division})`.as(
+                'user_division'
+              ),
         createdAt: solves.createdat,
         position:
           sql<number>`row_number() over (partition by ${solves.challengeid} order by ${solves.createdat})::int`.as(
@@ -200,6 +202,7 @@ const challengeDefaultOrder = [
 ] as const
 
 export type ChallengeWithMyScore = Challenge & {
+  isSolved?: boolean
   myScore?: number
   myPointDelta?: number
 }
@@ -238,7 +241,11 @@ const preparedFrozenPublicChallenges = preparedPerDb(db =>
 
 const preparedPublicChallengesWithMyScore = preparedPerDb(db =>
   db
-    .select({ ...challengesBaseSelection, myScore: solves.points })
+    .select({
+      ...challengesBaseSelection,
+      isSolved: sql<boolean>`COALESCE(${solves.source} = 'flag', false)`,
+      myScore: solves.points,
+    })
     .from(challenges)
     .leftJoin(
       solves,
@@ -254,7 +261,15 @@ const preparedPublicChallengesWithMyScore = preparedPerDb(db =>
 
 const preparedFrozenPublicChallengesWithMyScore = preparedPerDb(db =>
   db
-    .select({ ...frozenChallengesBaseSelection, myScore: solves.points })
+    .select({
+      ...frozenChallengesBaseSelection,
+      isSolved: sql<boolean>`COALESCE(${solves.source} = 'flag', false)`,
+      myScore: sql<number | null>`CASE
+        WHEN ${solves.source} = 'flag'
+          AND ${solves.createdat} <= ${sql.placeholder('cutoff')}::timestamptz
+        THEN ${challenges.frozenScore}
+        ELSE NULL END`,
+    })
     .from(challenges)
     .leftJoin(
       solves,
@@ -287,21 +302,34 @@ export const getChallenges = async (
 
   const [rows, dynamicScoresByUser] = await Promise.all([
     view.frozen
-      ? preparedFrozenPublicChallengesWithMyScore(db).execute({ userId })
+      ? preparedFrozenPublicChallengesWithMyScore(db).execute({
+          userId,
+          cutoff: new Date(view.cutoff).toISOString(),
+        })
       : preparedPublicChallengesWithMyScore(db).execute({ userId }),
-    getDynamicScoresForUsers(db, [userId]),
+    frozenStatsReady
+      ? getDynamicScoresForUsers(
+          db,
+          [userId],
+          view.frozen ? view.cutoff : undefined
+        )
+      : Promise.resolve(new Map<string, LeaderboardDynamicScore[]>()),
   ])
 
-  const deltaByChallenge = new Map(
-    (dynamicScoresByUser.get(userId) ?? []).map(s => [s.id, s.pointDelta])
+  const dynamicByChallenge = new Map(
+    (dynamicScoresByUser.get(userId) ?? []).map(s => [s.id, s])
   )
 
   return rows.map(({ myScore, ...rest }) => ({
     ...rest,
     score: frozenStatsReady ? (rest.score ?? 0) : 0,
     solveCount: frozenStatsReady ? (rest.solveCount ?? 0) : 0,
-    myScore: myScore ?? undefined,
-    myPointDelta: deltaByChallenge.get(rest.id),
+    myScore: !frozenStatsReady
+      ? undefined
+      : view.frozen && scoringKindOf(rest.data) === ChallengeScoringKind.DYNAMIC
+        ? dynamicByChallenge.get(rest.id)?.points
+        : (myScore ?? undefined),
+    myPointDelta: dynamicByChallenge.get(rest.id)?.pointDelta,
   }))
 }
 

@@ -51,7 +51,9 @@
   const selfSolves = $derived(userQuery.data?.solves)
 
   const localSolvedIds = new SvelteSet<string>()
-  const solvedIds = $derived(deriveSolvedIds(selfSolves, localSolvedIds))
+  const solvedIds = $derived(
+    deriveSolvedIds(selfSolves, localSolvedIds, challenges)
+  )
   const bloodIds = $derived(deriveBloodIds(selfSolves))
 
   let selectedId = $state<string | null>(null)
@@ -110,7 +112,9 @@
   }
 
   function handleSolve(challengeId: string) {
-    invalidateAfterSolve(queryClient, challengeId, id => localSolvedIds.add(id))
+    void invalidateAfterSolve(queryClient, challengeId, id =>
+      localSolvedIds.add(id)
+    )
   }
 
   function scrollToRow(id: string, attempts = 60) {

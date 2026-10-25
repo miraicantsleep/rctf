@@ -1,4 +1,4 @@
-import { AdminBotJobStatus, InstanceStatus } from '@rctf/types'
+import { AdminBotJobStatus, InstanceStatus, type Challenge } from '@rctf/types'
 import { QueryClient } from '@tanstack/svelte-query'
 import { queryKeys } from '$lib/query/keys'
 import { beforeAll, describe, expect, mock, test } from 'bun:test'
@@ -14,7 +14,7 @@ beforeAll(async () => {
 const sorted = (ids: Set<string>): string[] => [...ids].sort()
 
 describe('invalidateAfterSolve', () => {
-  test('refreshes the solved challenge instance immediately and retains provider status', () => {
+  test('refreshes the solved challenge instance immediately and retains provider status', async () => {
     const queryClient = new QueryClient()
     const instance = { status: InstanceStatus.RUNNING }
     const instanceKey = queryKeys.challengeInstance('solved')
@@ -25,13 +25,92 @@ describe('invalidateAfterSolve', () => {
     }
     const markSolved = mock()
 
-    challenges.invalidateAfterSolve(queryClient, 'solved', markSolved)
+    const refreshed = challenges.invalidateAfterSolve(
+      queryClient,
+      'solved',
+      markSolved
+    )
 
     expect(markSolved.mock.calls).toEqual([['solved']])
     expect(queryClient.getQueryState(instanceKey)?.isInvalidated).toBe(true)
     expect(queryClient.getQueryData(instanceKey)).toEqual(instance)
     expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false)
     expect(queryClient.getQueryState(adminKey)?.isInvalidated).toBe(false)
+    await refreshed
+    queryClient.clear()
+  })
+
+  test('stores confirmation across remounts and refreshes personal progress immediately without changing points', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const cached = [
+      { id: 'solved', isSolved: false, points: 500, solves: 0 },
+      { id: 'other', isSolved: false, points: 500, solves: 0 },
+    ] as Challenge[]
+    const pendingList = Promise.withResolvers<Challenge[]>()
+    const fetchingList = Promise.withResolvers<void>()
+    const refetchList = mock(() => {
+      fetchingList.resolve()
+      return pendingList.promise
+    })
+    const refetchSelf = mock(async () => ({
+      id: 'team',
+      solves: [{ id: 'solved' }],
+    }))
+    queryClient.setQueryDefaults(queryKeys.challenges, { queryFn: refetchList })
+    queryClient.setQueryDefaults(queryKeys.userSelf, { queryFn: refetchSelf })
+    queryClient.setQueryData(queryKeys.challenges, cached)
+    queryClient.setQueryData(queryKeys.userSelf, { id: 'team', solves: [] })
+    const markSolved = mock()
+
+    const refreshed = challenges.invalidateAfterSolve(
+      queryClient,
+      'solved',
+      markSolved
+    )
+    // The cache update happens after cancellation, without waiting for the new response.
+    await fetchingList.promise
+    const confirmed = queryClient.getQueryData<Challenge[]>(
+      queryKeys.challenges
+    )!
+    expect(confirmed).toEqual([{ ...cached[0]!, isSolved: true }, cached[1]!])
+    expect(
+      sorted(challenges.deriveSolvedIds([], new Set(), confirmed))
+    ).toEqual(['solved'])
+    expect(refetchList).toHaveBeenCalledTimes(1)
+    expect(refetchSelf).toHaveBeenCalledTimes(1)
+
+    pendingList.resolve(confirmed)
+    await refreshed
+    queryClient.clear()
+  })
+
+  test('cancels a pre-solve response so it cannot erase the confirmation', async () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    const stale = [{ id: 'solved', isSolved: false }] as Challenge[]
+    const fresh = [{ id: 'solved', isSolved: true }] as Challenge[]
+    const oldResponse = Promise.withResolvers<Challenge[]>()
+    const queryFn = mock<() => Promise<Challenge[]>>()
+      .mockImplementationOnce(() => oldResponse.promise)
+      .mockResolvedValue(fresh)
+    queryClient.setQueryData(queryKeys.challenges, stale)
+    const oldRequest = queryClient
+      .fetchQuery({
+        queryKey: queryKeys.challenges,
+        queryFn,
+        staleTime: 0,
+      })
+      .catch(() => undefined)
+
+    await challenges.invalidateAfterSolve(queryClient, 'solved', mock())
+    oldResponse.resolve(stale)
+    await oldRequest
+    await Promise.resolve()
+    expect(queryClient.getQueryData(queryKeys.challenges)).toEqual(fresh)
+    expect(queryFn).toHaveBeenCalledTimes(2)
     queryClient.clear()
   })
 })
@@ -65,6 +144,33 @@ describe('deriveSolvedIds', () => {
     expect(
       sorted(challenges.deriveSolvedIds([{ id: 'a' }], new Set()))
     ).toEqual(['a'])
+  })
+
+  test('uses live challenge confirmation while standings stay at zero and profile data is stale', () => {
+    expect(
+      sorted(
+        challenges.deriveSolvedIds([], new Set(), [
+          { id: 'post-freeze', isSolved: true },
+          { id: 'unsolved', isSolved: false },
+        ])
+      )
+    ).toEqual(['post-freeze'])
+  })
+
+  test('prefers explicit challenge status over older profile data, retaining a newly confirmed solve', () => {
+    expect(
+      sorted(
+        challenges.deriveSolvedIds(
+          [{ id: 'removed' }, { id: 'legacy' }],
+          new Set(['confirmed']),
+          [
+            { id: 'removed', isSolved: false },
+            { id: 'legacy' },
+            { id: 'confirmed', isSolved: false },
+          ]
+        )
+      )
+    ).toEqual(['confirmed', 'legacy'])
   })
 })
 

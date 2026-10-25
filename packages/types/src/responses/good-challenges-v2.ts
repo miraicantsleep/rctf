@@ -84,6 +84,13 @@ export const GoodChallengesV2 = response('goodChallengesV2', {
       hasFlag: example(z.boolean(), true).check(
         z.describe('Whether the challenge has a flag configured.')
       ),
+      isSolved: z
+        .optional(z.boolean())
+        .check(
+          z.describe(
+            'Whether the caller has a flag solve. Live during freeze; omitted for anonymous callers.'
+          )
+        ),
       scoringKind: z
         .optional(z.enum(ChallengeScoringKind))
         .check(z.describe('Scoring kind: decay, static, or dynamic.')),
@@ -91,14 +98,14 @@ export const GoodChallengesV2 = response('goodChallengesV2', {
         .optional(z.int())
         .check(
           z.describe(
-            "Caller's current points for this challenge. Present when the user has a solve (or feed entry) for it."
+            "Caller's points for this challenge, held at the cutoff during freeze. Omitted when no visible score is available."
           )
         ),
       yourPointDelta: z
         .optional(z.int())
         .check(
           z.describe(
-            "Caller's latest dynamic point delta for this challenge. Present for dynamic challenges when the caller had an entry in the latest feed tick."
+            "Caller's latest visible dynamic point delta for this challenge, held at the cutoff during freeze."
           )
         ),
     })

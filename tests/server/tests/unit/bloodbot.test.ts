@@ -97,24 +97,27 @@ describe('blood bot', () => {
   })
 })
 
-test('frozen blood templates expose the ice emoji and scoreboard URL without solver identity', () => {
+test('frozen blood templates preserve challenge, position, and emoji without solver identity', () => {
   const view = buildBloodMessageView({
     user: { id: 'private-team-id', name: 'Private Team Name' },
     challenge: { category: 'web', name: 'Example challenge' },
     bloodNumber: 2,
-    bloodEmojis: [],
+    bloodEmojis: ['gold', 'silver', 'bronze'],
     origin: 'https://ctf.example.com',
     provider: { escapeText: value => value, escapeUrl: value => value },
     maskSolver: true,
   })
   const message = mustache.render(
-    '{{teamName}} {{teamUrl}} {{challengeName}} {{bloodNumOrdinal}}',
+    '{{teamName}} {{teamUrl}} {{challengeName}} {{bloodNumOrdinal}} {{bloodEmoji}}',
     view
   )
   expect(view.teamName).toBe('??')
   expect(view.teamUrl).toBe('https://ctf.example.com/scores')
   expect(view.challengeName).toBe('Example challenge')
   expect(view.bloodNumOrdinal).toBe('2nd')
+  expect(view.bloodEmoji).toBe('silver')
+  expect(message).toContain('Example challenge 2nd silver')
+  expect(message).not.toContain('/profile/')
   expect(message).not.toContain('private-team-id')
   expect(message).not.toContain('Private Team Name')
 })

@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    BadAlreadySolvedChallenge,
-    GoodFlag,
-    SubmitFlagRoute,
-    type Challenge,
-  } from '@rctf/types'
+  import { SubmitFlagRoute, type Challenge } from '@rctf/types'
   import { showApiError } from '$lib/api'
   import { useApiForm } from '$lib/forms/use-api-form.svelte'
   import {
@@ -20,6 +15,7 @@
   import Input from '$lib/ui/input.svelte'
   import Spinner from '$lib/ui/spinner.svelte'
   import { resolveSubmitState } from './submit-ladder'
+  import { createFlagSubmitHandlers } from './flag-submit-handlers'
 
   interface Props {
     challenge: Challenge
@@ -53,21 +49,22 @@
     return () => clearInterval(interval)
   })
 
-  const form = useApiForm(SubmitFlagRoute, {
-    onSuccess: response => {
-      if (response.kind === GoodFlag.kind) {
+  const form = useApiForm(
+    SubmitFlagRoute,
+    createFlagSubmitHandlers({
+      onSolve: () => onSolve(challenge.id),
+      onCorrect: () => {
         toast.success('Flag correct!')
-        onSolve(challenge.id)
         form.setData({ flag: '' })
-      } else if (response.kind === BadAlreadySolvedChallenge.kind) {
+      },
+      onAlreadySolved: () => {
         toast.info('You already solved this challenge')
-        onSolve(challenge.id)
-      }
-    },
-    onError: response => {
-      showApiError(response)
-    },
-  })
+        form.clearErrors()
+        form.setData({ flag: '' })
+      },
+      onError: showApiError,
+    })
+  )
 
   $effect(() => {
     form.data.id = challenge.id
@@ -75,6 +72,7 @@
 
   function handleSubmit(event: SubmitEvent) {
     event.preventDefault()
+    if (submitState !== 'form' || form.submitting) return
     const flag = (form.data.flag ?? '').trim()
     if (!flag) return
     form.setData({ flag })

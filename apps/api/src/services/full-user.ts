@@ -39,27 +39,26 @@ export const getFullUser = async (
   db: DatabaseClient,
   user: User,
   view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true },
-  personalLive = false
+  includeLiveSolves = false
 ): Promise<FullUser> => {
-  const cutoff = view.frozen && !personalLive ? view.cutoff : undefined
+  const cutoff = view.frozen ? view.cutoff : undefined
   const [solves, freshRanks, dynamicScoresByUser] = await Promise.all([
     getUserChallengeSolves(
       db,
       user.id,
-      cutoff,
-      view.frozen ? view.cutoff : undefined
+      includeLiveSolves ? undefined : cutoff,
+      cutoff
     ),
     db
       .select({
         scoreboardDivision: view.frozen
           ? sql<string>`COALESCE(${view.ready ? users.frozenDivision : sql`NULL`}, ${divisionAtCutoff(view.cutoff)})`
           : users.division,
-        score:
-          view.frozen && !personalLive
-            ? view.ready
-              ? users.frozenScore
-              : sql<number | null>`NULL`
-            : users.score,
+        score: view.frozen
+          ? view.ready
+            ? users.frozenScore
+            : sql<number | null>`NULL`
+          : users.score,
         globalRank: view.frozen
           ? view.ready
             ? users.frozenGlobalRank
@@ -74,7 +73,9 @@ export const getFullUser = async (
       .from(users)
       .where(eq(users.id, user.id))
       .then(takeUnique),
-    getDynamicScoresForUsers(db, [user.id], cutoff),
+    view.frozen && !view.ready
+      ? Promise.resolve(new Map<string, DynamicScoreData[]>())
+      : getDynamicScoresForUsers(db, [user.id], cutoff),
   ])
 
   const challengeIds = solves.map(item => item.solve.challengeid)
@@ -139,7 +140,7 @@ export const getFullUser = async (
   return {
     ...user,
     division:
-      view.frozen && !personalLive
+      view.frozen && !includeLiveSolves
         ? (freshRanks?.scoreboardDivision ?? user.division)
         : user.division,
     scoreboardDivision: freshRanks?.scoreboardDivision ?? user.division,
@@ -151,20 +152,19 @@ export const getFullUser = async (
     dynamicScores: dynamicScoresByUser.get(user.id) ?? [],
     solves: solves.map(item => {
       const challScore = challengeScores.get(item.solve.challengeid)
+      const hideSolveStats =
+        view.frozen &&
+        (!view.ready || new Date(item.solve.createdat).getTime() > view.cutoff)
       return {
         ...item.challengeData,
         id: item.solve.challengeid,
         createdAt: new Date(item.solve.createdat).getTime(),
         solves: challScore?.solveCount ?? null,
-        points: challScore?.score ?? null,
-        awardedPoints:
-          challengeAwardedPoints.get(item.solve.challengeid) ?? null,
-        bloodIndex:
-          view.frozen &&
-          (!view.ready ||
-            new Date(item.solve.createdat).getTime() > view.cutoff)
-            ? null
-            : item.bloodIndex,
+        points: hideSolveStats ? null : (challScore?.score ?? null),
+        awardedPoints: hideSolveStats
+          ? null
+          : (challengeAwardedPoints.get(item.solve.challengeid) ?? null),
+        bloodIndex: hideSolveStats ? null : item.bloodIndex,
       }
     }),
   }
@@ -174,11 +174,11 @@ export const getFullUserFromId = async (
   db: DatabaseClient,
   id: string,
   view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true },
-  personalLive = false
+  includeLiveSolves = false
 ): Promise<FullUser | undefined> => {
   const user = await getUser(db, id)
   if (!user || user.banned) {
     return undefined
   }
-  return await getFullUser(db, user, view, personalLive)
+  return await getFullUser(db, user, view, includeLiveSolves)
 }

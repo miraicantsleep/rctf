@@ -299,7 +299,7 @@ describe('full-user service', () => {
   })
 })
 
-test('frozen self profiles keep personal progress live without exposing live ranks or counts', async () => {
+test('frozen self profiles keep solves live without exposing live points, ranks, or counts', async () => {
   const db = getDb()
   const redis = await createRedis()
   const team = await generateRealTestUser()
@@ -342,16 +342,14 @@ test('frozen self profiles keep personal progress live without exposing live ran
         createdat: new Date(freezeTime + (i ? 1 : -1)).toISOString(),
       }))
     )
-    await db
-      .insert(scoreEvents)
-      .values({
-        id: crypto.randomUUID(),
-        userid: team.user.id,
-        challengeid: after.challenge.id,
-        pointsDelta: 400,
-        source: 'flag',
-        eventAt: new Date(freezeTime + 1).toISOString(),
-      })
+    await db.insert(scoreEvents).values({
+      id: crypto.randomUUID(),
+      userid: team.user.id,
+      challengeid: after.challenge.id,
+      pointsDelta: 400,
+      source: 'flag',
+      eventAt: new Date(freezeTime + 1).toISOString(),
+    })
     await redis.set(
       keyFrozenSnapshotFingerprint,
       frozenSnapshotFingerprint(timing)
@@ -376,7 +374,7 @@ test('frozen self profiles keep personal progress live without exposing live ran
               : GoodUserDataV2
         )
         expect(body.data).toMatchObject({
-          score: 900,
+          score: 500,
           globalPlace: 1,
           divisionPlace: 1,
         })
@@ -386,11 +384,11 @@ test('frozen self profiles keep personal progress live without exposing live ran
         ).toMatchObject({ points: 500, solves: 1 })
         expect(
           body.data.solves.find((s: any) => s.id === after.challenge.id)
-        ).toMatchObject({ points: 500, solves: 0 })
+        ).toMatchObject({ points: null, solves: 0 })
         if (version === 'v2')
           expect(
             body.data.solves.find((s: any) => s.id === after.challenge.id)
-          ).toMatchObject({ awardedPoints: 400, bloodIndex: null })
+          ).toMatchObject({ awardedPoints: null, bloodIndex: null })
       }
       const publicRes = await request(
         app,
@@ -430,7 +428,7 @@ test('frozen self profiles keep personal progress live without exposing live ran
     })
     const pending = await expectResponse(pendingRes, GoodUserSelfDataV2)
     expect(pending.data).toMatchObject({
-      score: 900,
+      score: 0,
       globalPlace: null,
       divisionPlace: null,
     })
@@ -439,6 +437,7 @@ test('frozen self profiles keep personal progress live without exposing live ran
       expect(solve).toMatchObject({
         points: null,
         solves: null,
+        awardedPoints: null,
         bloodIndex: null,
       })
   } finally {

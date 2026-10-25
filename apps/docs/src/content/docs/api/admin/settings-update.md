@@ -45,7 +45,7 @@ This route updates runtime setting overrides. A nullable field set to `null{:ts}
 
 Changing effective competition timing queues a leaderboard recalculation. An enabled freeze time must fall inside the competition window. Set `freezeEnabled` to `false` to disable freezing while retaining the schedule, including a schedule inherited from configuration. Setting either override to `null` restores its default.
 
-Once reached, the freeze holds public standings, ranks, graphs, and challenge statistics at the cutoff. Teams retain their current personal score and solves; users with `leaderboardRead` retain live access. Blood announcements continue with anonymous solver identities.
+Once reached, the freeze holds standings, personal scores, ranks, graphs, and challenge statistics at the cutoff. Teams still receive live confirmation of their own accepted flags, without post-freeze awarded points or solve positions. Authenticated v2 challenge responses include `isSolved` independently of frozen scores. Users with `leaderboardRead` retain live access. Blood announcements retain challenge names and blood positions, but mask team names and link to the scoreboard instead of the team's profile; announcement timing can still provide clues about solve positions.
 
 ::request-body{def="UpdateAdminSettingsRouteV2" title="Request body"}
 

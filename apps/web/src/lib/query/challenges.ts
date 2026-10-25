@@ -15,6 +15,7 @@ import {
   GoodChallengeSolvesV2,
   GoodChallengesV2,
   GoodInstanceStatus,
+  type Challenge,
 } from '@rctf/types'
 import {
   createInfiniteQuery,
@@ -34,12 +35,18 @@ const SELF_SOLVES_PARAMS = { limit: 10, offset: 0 }
 
 export function deriveSolvedIds(
   selfSolves: { id: string }[] | null | undefined,
-  localSolvedIds: ReadonlySet<string>
+  localSolvedIds: ReadonlySet<string>,
+  challenges: Pick<Challenge, 'id' | 'isSolved'>[] = []
 ): Set<string> {
-  const solvedIds = new Set<string>(localSolvedIds)
+  const solvedIds = new Set<string>()
   for (const solve of selfSolves ?? []) {
     solvedIds.add(solve.id)
   }
+  for (const challenge of challenges) {
+    if (challenge.isSolved === true) solvedIds.add(challenge.id)
+    if (challenge.isSolved === false) solvedIds.delete(challenge.id)
+  }
+  for (const id of localSolvedIds) solvedIds.add(id)
   return solvedIds
 }
 
@@ -297,20 +304,44 @@ export function invalidateAfterSolve(
   queryClient: QueryClient,
   challengeId: string,
   markSolved: (id: string) => void
-): void {
+): Promise<void> {
   markSolved(challengeId)
   void queryClient.invalidateQueries({
     queryKey: queryKeys.challengeInstance(challengeId),
     exact: true,
   })
 
+  const refreshProgress = queryClient
+    .cancelQueries({ queryKey: queryKeys.challenges, exact: true })
+    .then(() => {
+      queryClient.setQueryData<Challenge[]>(queryKeys.challenges, cached =>
+        cached?.map(challenge =>
+          challenge.id === challengeId
+            ? { ...challenge, isSolved: true }
+            : challenge
+        )
+      )
+      return Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.challenges,
+          exact: true,
+          refetchType: 'all',
+        }),
+        queryClient.invalidateQueries({
+          queryKey: queryKeys.userSelf,
+          exact: true,
+          refetchType: 'all',
+        }),
+      ])
+    })
+
   // FIXME(es3n1n): Small delay to allow the server's leaderboard worker to update the cache
   setTimeout(() => {
     queryClient.refetchQueries({ queryKey: queryKeys.challenges, exact: true })
-    queryClient.refetchQueries({ queryKey: queryKeys.userSelf, exact: true })
     queryClient.invalidateQueries({ queryKey: queryKeys.fullLeaderboard })
     queryClient.invalidateQueries({
       queryKey: queryKeys.challenge(challengeId),
     })
   }, 500)
+  return refreshProgress.then(() => undefined)
 }

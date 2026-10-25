@@ -47,6 +47,7 @@ challsGroup.route(GetChallengesRouteV2, async ({ res, ctx, user }) => {
           : null,
         hasFlag: (item.data.flags?.length ?? 0) > 0,
         scoringKind: item.data.scoring?.kind ?? ChallengeScoringKind.DECAY,
+        isSolved: item.isSolved,
         yourScore: item.myScore,
         yourPointDelta: item.myPointDelta,
       }

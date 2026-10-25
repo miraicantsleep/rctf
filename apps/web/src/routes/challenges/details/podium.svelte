@@ -66,7 +66,7 @@
       ? {
           name: currentUser.name,
           avatarUrl: currentUser.avatarUrl,
-          detail: 'Unsolved',
+          detail: isSolved ? 'Solved' : 'Unsolved',
         }
       : null
 
