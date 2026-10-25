@@ -86,7 +86,9 @@
   const divisionOptions = $derived(
     allowedDivisionOptions(clientConfig.divisions, user.allowedDivisions)
   )
-  const showDivision = $derived(divisionOptions.length > 1)
+  const showDivision = $derived(
+    clientConfig.allowDivisionChanges && divisionOptions.length > 1
+  )
   const selectedDivisionLabel = $derived(
     clientConfig.divisions[profileForm.data.division ?? ''] ?? 'Select division'
   )

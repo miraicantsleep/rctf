@@ -49,7 +49,8 @@ import {
   userIsNotBanned,
 } from './challenge-queries'
 import { rateLimitFlag } from './rate-limit'
-import { getCompetitionTiming } from './settings'
+import { getCompetitionTiming, isScoreboardFrozen } from './settings'
+import { historicalDynamicEntries } from './historical-scores'
 import { createSubmission } from './submissions'
 import { getUser } from './users'
 
@@ -135,7 +136,10 @@ const createRankedSolvesForChallenges = (
         userAvatarUrl: users.avatarUrl,
         userCountryCode: users.countryCode,
         userStatusText: users.statusText,
-        userDivision: users.division,
+        userDivision:
+          cutoff === undefined
+            ? users.division
+            : sql<string>`COALESCE(${users.frozenDivision}, ${users.division})`,
         createdAt: solves.createdat,
         position:
           sql<number>`row_number() over (partition by ${solves.challengeid} order by ${solves.createdat})::int`.as(
@@ -768,70 +772,59 @@ export const getChallengeScoresWithPosition = async (
       }
     }
 
-    const cutoffIso = new Date(view.cutoff).toISOString()
-    const totals = db.$with('frozen_scores').as(
-      db
-        .select({
-          userId: sql<string>`${scoreEvents.userid}`.as('fs_uid'),
-          points: sql<number>`SUM(${scoreEvents.pointsDelta})::int`.as(
-            'fs_points'
-          ),
-        })
-        .from(scoreEvents)
-        .innerJoin(users, nonBannedUserJoin(scoreEvents.userid))
-        .where(
-          and(
-            eq(scoreEvents.challengeid, challengeId),
-            sql`${scoreEvents.eventAt} <= ${cutoffIso}`
-          )
-        )
-        .groupBy(scoreEvents.userid)
-    )
+    const entries = historicalDynamicEntries(db, view.cutoff, [challengeId])
     const ranked = db.$with('frozen_ranked').as(
       db
         .select({
-          userId: totals.userId,
+          userId: entries.userId,
           userName: users.name,
           userAvatarUrl: users.avatarUrl,
           userCountryCode: users.countryCode,
           userStatusText: users.statusText,
-          division: users.division,
+          division:
+            sql<string>`COALESCE(${users.frozenDivision}, ${users.division})`.as(
+              'score_division'
+            ),
           globalRank: users.frozenGlobalRank,
           divisionRank: users.frozenDivisionRank,
-          points: totals.points,
+          points: entries.points,
           position:
-            sql<number>`row_number() over (order by ${totals.points} desc, ${totals.userId} asc)::int`.as(
+            sql<number>`row_number() over (order by ${entries.points} desc,
+          ${entries.pointsUpdatedAt} asc, ${entries.userId} asc)::int`.as(
               'position'
             ),
         })
-        .from(totals)
-        .innerJoin(users, eq(users.id, totals.userId))
+        .from(entries)
+        .innerJoin(users, and(eq(users.id, entries.userId), userIsNotBanned))
     )
-    const rows = await db
-      .with(totals, ranked)
-      .select({
-        userId: ranked.userId,
-        userName: ranked.userName,
-        userAvatarUrl: ranked.userAvatarUrl,
-        userCountryCode: ranked.userCountryCode,
-        userStatusText: ranked.userStatusText,
-        division: ranked.division,
-        globalRank: ranked.globalRank,
-        divisionRank: ranked.divisionRank,
-        points: ranked.points,
-        position: ranked.position,
-        myPosition: sql<number | null>`(
-          SELECT position FROM frozen_ranked WHERE fs_uid = ${userId}
-        )`,
-        total: sql<number>`count(*) over ()::int`,
-      })
+    const myPositionExpr = sql<number | null>`(${db
+      .select({ position: ranked.position })
       .from(ranked)
-      .orderBy(asc(ranked.position))
-      .limit(limit)
-      .offset(offset)
-
-    const total = rows[0]?.total ?? 0
-    const myPosition = rows[0]?.myPosition ?? null
+      .where(eq(ranked.userId, userId ?? ''))})`.as('my_position')
+    const [rows, summary] = await Promise.all([
+      db
+        .with(ranked)
+        .select({
+          userId: ranked.userId,
+          userName: ranked.userName,
+          userAvatarUrl: ranked.userAvatarUrl,
+          userCountryCode: ranked.userCountryCode,
+          userStatusText: ranked.userStatusText,
+          division: ranked.division,
+          globalRank: ranked.globalRank,
+          divisionRank: ranked.divisionRank,
+          points: ranked.points,
+        })
+        .from(ranked)
+        .orderBy(asc(ranked.position))
+        .limit(limit)
+        .offset(offset),
+      db
+        .with(ranked)
+        .select({ total: count(), myPosition: myPositionExpr })
+        .from(ranked)
+        .then(takeUnique),
+    ])
     const dynamic = await getDynamicScoresForUsers(
       db,
       rows.map(row => row.userId),
@@ -839,25 +832,22 @@ export const getChallengeScoresWithPosition = async (
     )
     return {
       challengeExists: true,
-      total,
-      myPosition,
-      scores: rows.map(row => {
-        const score = dynamic
-          .get(row.userId)
-          ?.find(item => item.id === challengeId)
-        return {
-          userId: row.userId,
-          userName: row.userName,
-          userAvatarUrl: row.userAvatarUrl,
-          userCountryCode: row.userCountryCode,
-          userStatusText: row.userStatusText,
-          points: score?.points ?? row.points,
-          pointDelta: score?.pointDelta ?? 0,
-          globalPlace: row.globalRank ?? 0,
-          division: row.division,
-          divisionPlace: row.divisionRank ?? 0,
-        }
-      }),
+      total: summary?.total ?? 0,
+      myPosition: summary?.myPosition ?? null,
+      scores: rows.map(row => ({
+        userId: row.userId,
+        userName: row.userName,
+        userAvatarUrl: row.userAvatarUrl,
+        userCountryCode: row.userCountryCode,
+        userStatusText: row.userStatusText,
+        points: row.points,
+        pointDelta:
+          dynamic.get(row.userId)?.find(item => item.id === challengeId)
+            ?.pointDelta ?? 0,
+        globalPlace: row.globalRank ?? 0,
+        division: row.division,
+        divisionPlace: row.divisionRank ?? 0,
+      })),
     }
   }
 
@@ -1052,7 +1042,8 @@ export const getChallengeScoresGraph = async (
 export const getUserChallengeSolves = async (
   db: DatabaseClient,
   userId: string,
-  cutoff?: number
+  cutoff?: number,
+  bloodCutoff = cutoff
 ): Promise<
   { solve: Solve; challengeData: ChallengeData; bloodIndex: number | null }[]
 > => {
@@ -1092,9 +1083,9 @@ export const getUserChallengeSolves = async (
       .where(
         and(
           eq(solves.source, 'flag'),
-          cutoff === undefined
+          bloodCutoff === undefined
             ? undefined
-            : sql`${solves.createdat} <= ${new Date(cutoff).toISOString()}`
+            : sql`${solves.createdat} <= ${new Date(bloodCutoff).toISOString()}`
         )
       )
   )
@@ -1393,7 +1384,7 @@ export const getDynamicScoresForUsers = async (
 
     const result = new Map<string, LeaderboardDynamicScore[]>()
     for (const row of totals) {
-      if (!row.userId) continue
+      if (!row.userId || !row.points) continue
       const scores = result.get(row.userId) ?? []
       scores.push({
         id: row.challengeId,
@@ -1597,8 +1588,14 @@ export const submitFlag = async (
 
   if (shouldNotifyBloodbot(bloodNumber)) {
     getUser(db, params.userId)
-      .then(user => {
-        return sendBloodMessage(user!, challenge.data, bloodNumber)
+      .then(async user => {
+        const timing = await getCompetitionTiming(db, redis)
+        return sendBloodMessage(
+          user!,
+          challenge.data,
+          bloodNumber,
+          isScoreboardFrozen(timing)
+        )
       })
       .catch(err => {
         log.error(

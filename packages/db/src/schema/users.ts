@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   boolean,
+  bigserial,
   check,
   foreignKey,
   index,
@@ -34,6 +35,7 @@ export const users = pgTable(
     frozenScore: integer('frozen_score'),
     frozenGlobalRank: integer('frozen_global_rank'),
     frozenDivisionRank: integer('frozen_division_rank'),
+    frozenDivision: text('frozen_division'),
     lastSolveAt: timestamp('last_solve_at', {
       withTimezone: true,
       mode: 'string',
@@ -76,8 +78,30 @@ export const users = pgTable(
       .using('btree', sql`frozen_global_rank ASC`)
       .where(sql`frozen_global_rank IS NOT NULL`),
     index('users_frozen_division_leaderboard_idx')
-      .using('btree', sql`division, frozen_division_rank ASC`)
+      .using('btree', sql`frozen_division, frozen_division_rank ASC`)
       .where(sql`frozen_division_rank IS NOT NULL`),
+  ]
+)
+
+// Populated by a database trigger so every writer records changes atomically.
+export const userDivisions = pgTable(
+  'user_divisions',
+  {
+    id: bigserial({ mode: 'number' }).primaryKey(),
+    userid: text()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade', onUpdate: 'cascade' }),
+    division: text().notNull(),
+    changedAt: timestamp('changed_at', { withTimezone: true, mode: 'string' })
+      .notNull()
+      .defaultNow(),
+  },
+  table => [
+    index('user_divisions_history_idx').on(
+      table.userid,
+      table.changedAt,
+      table.id
+    ),
   ]
 )
 

@@ -137,6 +137,7 @@ export const loadEnvConfig = (): ConfigLayer => {
     ['startTime', getEnvInteger('RCTF_START_TIME')],
     ['endTime', getEnvInteger('RCTF_END_TIME')],
     ['freezeTime', getEnvInteger('RCTF_FREEZE_TIME')],
+    ['allowDivisionChanges', getEnvBoolean('RCTF_ALLOW_DIVISION_CHANGES')],
     ['leaderboard', leaderboard],
     ['loginTimeout', getEnvInteger('RCTF_LOGIN_TIMEOUT')],
     ['uploadProvider', uploadProvider],

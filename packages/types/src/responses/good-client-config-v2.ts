@@ -8,6 +8,7 @@ export const GoodClientConfigV2 = response('goodClientConfigV2', {
   status: 200,
   message: 'The client config was retrieved.',
   data: z.object({
+    allowDivisionChanges: z.boolean(),
     hideScoreboard: z.boolean(),
     hideChallenges: z.boolean(),
     meta: z.object({

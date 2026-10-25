@@ -15,6 +15,12 @@ type GraphWriteCommand = (
 ) => Promise<void>
 
 export type TypedRedis = Redis & {
+  rctfCacheSettings: (
+    key: string,
+    revision: string,
+    value: string,
+    ttl: string
+  ) => Promise<number>
   rctfMergeGraph: GraphWriteCommand
   rctfReplaceGraph: GraphWriteCommand
   rctfRateLimit: (key: string, limit: string, ttlMs: string) => Promise<number>
@@ -39,6 +45,10 @@ export const loadLuaCommands = async (redis: Redis): Promise<TypedRedis> => {
   redis.defineCommand('rctfRateLimit', {
     numberOfKeys: 1,
     lua: await loadLuaScript('rate-limit.lua'),
+  })
+  redis.defineCommand('rctfCacheSettings', {
+    numberOfKeys: 1,
+    lua: await loadLuaScript('cache-settings.lua'),
   })
 
   return redis as TypedRedis

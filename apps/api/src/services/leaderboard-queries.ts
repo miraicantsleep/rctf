@@ -1,4 +1,4 @@
-import { scoreEvents, solves, users, type DatabaseClient } from '@rctf/db'
+import { solves, users, type DatabaseClient } from '@rctf/db'
 import { takeUnique } from '@rctf/db/util'
 import { ChallengeScoringKind } from '@rctf/types'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
@@ -13,6 +13,7 @@ import { scoringKindOf } from './challenge-queries'
 import { getChallenge, getLeaderboardChallengeData } from './challenges'
 import { userNameSearchFilter } from './users'
 import type { ScoreboardView } from './scoreboard-visibility'
+import { historicalDynamicEntries } from './historical-scores'
 
 type LeaderboardEntryRow = {
   id: string
@@ -36,7 +37,7 @@ const frozenLeaderboardEntrySelection = {
   id: users.id,
   name: users.name,
   score: users.frozenScore,
-  division: users.division,
+  division: sql<string>`COALESCE(${users.frozenDivision}, ${users.division})`,
   divisionRank: users.frozenDivisionRank,
   globalRank: users.frozenGlobalRank,
 }
@@ -107,7 +108,9 @@ export const searchLeaderboard = async (
   const whereClause = and(
     searchFilter,
     rankedFilterFor(view),
-    division ? eq(users.division, division) : undefined
+    division
+      ? eq(view.frozen ? users.frozenDivision : users.division, division)
+      : undefined
   )
 
   const [totalRow, matchingUsers] = await Promise.all([
@@ -178,7 +181,9 @@ export const getLeaderboardWithTotal = async (
   if (view.frozen) {
     const whereClause = and(
       rankedFilterFor(view),
-      division ? eq(users.division, division) : undefined
+      division
+        ? eq(view.frozen ? users.frozenDivision : users.division, division)
+        : undefined
     )
     const [totalRow, leaderboard] = await Promise.all([
       db
@@ -238,9 +243,42 @@ export const getChallengeLeaderboardWithTotal = async (
 
   const whereClause = and(
     rankedFilterFor(view),
-    division ? eq(users.division, division) : undefined,
+    division
+      ? eq(view.frozen ? users.frozenDivision : users.division, division)
+      : undefined,
     search ? userNameSearchFilter(search) : undefined
   )
+  if (
+    view.frozen &&
+    scoringKindOf(challenge.data) === ChallengeScoringKind.DYNAMIC
+  ) {
+    const entries = historicalDynamicEntries(db, view.cutoff, [challengeId])
+    const join = eq(entries.userId, users.id)
+    const [totalRow, leaderboard] = await Promise.all([
+      db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(users)
+        .innerJoin(entries, join)
+        .where(whereClause)
+        .then(takeUnique),
+      db
+        .select(selectionFor(view))
+        .from(users)
+        .innerJoin(entries, join)
+        .where(whereClause)
+        .orderBy(
+          desc(entries.points),
+          asc(entries.pointsUpdatedAt),
+          asc(entries.userId)
+        )
+        .limit(limit)
+        .offset(offset),
+    ])
+    return {
+      total: totalRow?.count ?? 0,
+      leaderboard: await hydrateLeaderboardEntries(db, leaderboard, view),
+    }
+  }
   const solveJoin = and(
     eq(solves.userid, users.id),
     eq(solves.challengeid, challengeId),
@@ -248,18 +286,9 @@ export const getChallengeLeaderboardWithTotal = async (
       ? sql`${solves.createdat} <= ${new Date(view.cutoff).toISOString()}`
       : undefined
   )
-  const frozenDynamicPoints = sql<number>`COALESCE((
-    SELECT SUM(${scoreEvents.pointsDelta})::int
-    FROM ${scoreEvents}
-    WHERE ${scoreEvents.userid} = ${users.id}
-      AND ${scoreEvents.challengeid} = ${challengeId}
-      AND ${scoreEvents.eventAt} <= ${view.frozen ? new Date(view.cutoff).toISOString() : new Date().toISOString()}
-  ), 0)`
   const orderBy =
     scoringKindOf(challenge.data) === ChallengeScoringKind.DYNAMIC
-      ? view.frozen
-        ? [desc(frozenDynamicPoints), asc(solves.userid)]
-        : [desc(solves.points), asc(solves.pointsUpdatedAt), asc(solves.userid)]
+      ? [desc(solves.points), asc(solves.pointsUpdatedAt), asc(solves.userid)]
       : [asc(solves.createdat), asc(solves.userid)]
 
   const [totalRow, leaderboard] = await Promise.all([

@@ -210,7 +210,7 @@
             solveTime: solve.createdAt,
           })),
           dynamicScores: user.dynamicScores,
-          division: user.division,
+          division: user.scoreboardDivision ?? user.division,
           divisionPlace: user.divisionPlace ?? 0,
           globalPlace: user.globalPlace,
         },

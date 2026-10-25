@@ -12,7 +12,8 @@ export const clientConfigQueryOptions = queryOptions({
     setClientConfig(data)
     return data
   },
-  staleTime: Infinity,
+  staleTime: 30_000,
+  refetchInterval: 30_000,
   gcTime: Infinity,
 })
 

@@ -90,6 +90,7 @@ export const ServerConfigSchema = z.object({
   // Divisions
   divisions: z._default(z.record(z.string(), z.string()), { open: 'Open' }), // id -> display name
   defaultDivision: z.optional(z.string()),
+  allowDivisionChanges: z._default(z.boolean(), false),
   divisionACLs: z.optional(z.array(ACLSchema)),
 
   // Auth

@@ -52,6 +52,7 @@ export const GoodUserSelfDataV2 = response('goodUserSelfDataV2', {
     division: example(z.string(), 'open').check(
       z.describe('Division the team competes in.')
     ),
+    scoreboardDivision: z.optional(z.string()),
     score: example(z.int(), 13370).check(z.describe('Total team score.')),
     globalPlace: example(z.nullable(z.int()), 7).check(
       z.describe('Overall rank, or `null` when unranked.')

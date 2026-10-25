@@ -11,7 +11,8 @@
 
   let { user, divisions }: Props = $props()
 
-  const divisionLabel = $derived(divisions[user.division] ?? user.division)
+  const rankDivision = $derived(user.scoreboardDivision ?? user.division)
+  const divisionLabel = $derived(divisions[rankDivision] ?? rankDivision)
   const flagFilename = $derived(
     user.countryCode ? countryCodeToFlagFilename(user.countryCode) : null
   )

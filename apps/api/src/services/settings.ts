@@ -20,24 +20,36 @@ export type CompetitionTiming = Pick<
 >
 
 type CachedResolvedSettings = {
-  version: 1
+  version: 2
+  revision: number
   defaultsSignature: string
   resolved: ResolvedSettings
 }
 
-export async function getSettings(
-  db: DatabaseClient
-): Promise<EditableSettings> {
+const normalizeSettings = (data: EditableSettings): EditableSettings =>
+  data.sponsors
+    ? { ...data, sponsors: data.sponsors.map(normalizeSponsorIcons) }
+    : data
+
+const readSettings = async (db: DatabaseClient) => {
   const row = await db
     .select()
     .from(settings)
     .where(eq(settings.id, VALUE_ID))
     .then(takeUnique)
-  const data = row?.data ?? {}
-  return data.sponsors
-    ? { ...data, sponsors: data.sponsors.map(normalizeSponsorIcons) }
-    : data
+  return {
+    data: normalizeSettings(row?.data ?? {}),
+    revision: row?.revision ?? 0,
+  }
 }
+
+export async function getSettings(
+  db: DatabaseClient
+): Promise<EditableSettings> {
+  return (await readSettings(db)).data
+}
+
+export class InvalidSettingsError extends Error {}
 
 export function patchSettings(
   current: EditableSettings,
@@ -55,27 +67,65 @@ export function patchSettings(
   return updated
 }
 
+export async function updateSettingsWithTiming(
+  db: DatabaseClient,
+  patch: SettingsPatch,
+  redis?: TypedRedis
+) {
+  const result = await db.transaction(async tx => {
+    await tx
+      .insert(settings)
+      .values({ id: VALUE_ID, data: {} })
+      .onConflictDoNothing()
+    const current = (
+      await tx
+        .select()
+        .from(settings)
+        .where(eq(settings.id, VALUE_ID))
+        .for('update')
+    )[0]!
+    const updated = patchSettings(current.data, patch)
+    const before = resolveSettings(current.data)
+    const after = resolveSettings(updated)
+    if (after.freezeEnabled && after.freezeTime === null) {
+      throw new InvalidSettingsError(
+        'freezeTime is required when freezing is enabled'
+      )
+    }
+    if (
+      after.freezeTime !== null &&
+      (after.freezeTime < after.startTime || after.freezeTime > after.endTime)
+    ) {
+      throw new InvalidSettingsError(
+        'freezeTime must be between startTime and endTime'
+      )
+    }
+    const revision = current.revision + 1
+    await tx
+      .update(settings)
+      .set({ data: updated, revision })
+      .where(eq(settings.id, VALUE_ID))
+    return {
+      overrides: normalizeSettings(updated),
+      revision,
+      resolved: after,
+      timingChanged:
+        before.startTime !== after.startTime ||
+        before.endTime !== after.endTime ||
+        before.freezeTime !== after.freezeTime,
+    }
+  })
+  if (redis)
+    await setCachedResolvedSettings(redis, result.resolved, result.revision)
+  return result
+}
+
 export async function updateSettings(
   db: DatabaseClient,
   patch: SettingsPatch,
   redis?: TypedRedis
 ): Promise<EditableSettings> {
-  const current = await getSettings(db)
-  const updated = patchSettings(current, patch)
-
-  await db
-    .insert(settings)
-    .values({ id: VALUE_ID, data: updated })
-    .onConflictDoUpdate({
-      target: settings.id,
-      set: { data: updated },
-    })
-
-  if (redis) {
-    await setCachedResolvedSettings(redis, resolveSettings(updated))
-  }
-
-  return updated
+  return (await updateSettingsWithTiming(db, patch, redis)).overrides
 }
 
 export function getConfigDefaults(): EditableSettings {
@@ -85,6 +135,7 @@ export function getConfigDefaults(): EditableSettings {
     startTime: config.startTime,
     endTime: config.endTime,
     freezeTime: config.freezeTime,
+    freezeEnabled: config.freezeTime !== undefined,
     sponsors: config.sponsors,
     meta: config.meta,
     faviconUrl: config.faviconUrl,
@@ -94,12 +145,15 @@ export function getConfigDefaults(): EditableSettings {
 }
 
 export function resolveSettings(overrides: EditableSettings) {
+  const scheduledFreeze = overrides.freezeTime ?? config.freezeTime ?? null
+  const freezeEnabled = overrides.freezeEnabled ?? scheduledFreeze !== null
   return {
     ctfName: overrides.ctfName ?? config.ctfName,
     homeContent: overrides.homeContent ?? config.homeContent,
     startTime: overrides.startTime ?? config.startTime,
     endTime: overrides.endTime ?? config.endTime,
-    freezeTime: overrides.freezeTime ?? config.freezeTime ?? null,
+    freezeEnabled,
+    freezeTime: freezeEnabled ? scheduledFreeze : null,
     sponsors: overrides.sponsors ?? config.sponsors,
     meta: {
       description: overrides.meta?.description ?? config.meta.description,
@@ -115,47 +169,48 @@ const getConfigDefaultsSignature = (): string =>
   JSON.stringify(getConfigDefaults())
 
 const getCachedResolvedSettings = async (
-  redis: TypedRedis
+  redis: TypedRedis,
+  revision: number
 ): Promise<ResolvedSettings | undefined> => {
-  const cached = await redis.get(RESOLVED_SETTINGS_CACHE_KEY)
-  if (!cached) {
-    return undefined
-  }
-
   try {
+    const cached = await redis.get(RESOLVED_SETTINGS_CACHE_KEY)
+    if (!cached) return undefined
     const entry = JSON.parse(cached) as Partial<CachedResolvedSettings>
     if (
-      entry.version !== 1 ||
-      entry.defaultsSignature !== getConfigDefaultsSignature() ||
-      !entry.resolved
+      entry.version === 2 &&
+      entry.revision === revision &&
+      entry.defaultsSignature === getConfigDefaultsSignature() &&
+      entry.resolved
     ) {
-      await redis.del(RESOLVED_SETTINGS_CACHE_KEY)
-      return undefined
+      return entry.resolved
     }
-
-    return entry.resolved
   } catch {
-    await redis.del(RESOLVED_SETTINGS_CACHE_KEY)
-    return undefined
+    // Redis is an optimization; database timing remains authoritative.
   }
+  return undefined
 }
 
 const setCachedResolvedSettings = async (
   redis: TypedRedis,
-  resolved: ResolvedSettings
+  resolved: ResolvedSettings,
+  revision: number
 ): Promise<void> => {
   const entry: CachedResolvedSettings = {
-    version: 1,
+    version: 2,
+    revision,
     defaultsSignature: getConfigDefaultsSignature(),
     resolved,
   }
-
-  await redis.set(
-    RESOLVED_SETTINGS_CACHE_KEY,
-    JSON.stringify(entry),
-    'PX',
-    RESOLVED_SETTINGS_CACHE_TTL
-  )
+  try {
+    await redis.rctfCacheSettings(
+      RESOLVED_SETTINGS_CACHE_KEY,
+      String(revision),
+      JSON.stringify(entry),
+      String(RESOLVED_SETTINGS_CACHE_TTL)
+    )
+  } catch {
+    // A committed settings update must not fail because its cache is unavailable.
+  }
 }
 
 export const invalidateResolvedSettingsCache = async (
@@ -169,16 +224,18 @@ export async function getResolvedSettings(
   redis?: TypedRedis
 ): Promise<ResolvedSettings> {
   if (redis) {
-    const cached = await getCachedResolvedSettings(redis)
-    if (cached) {
-      return cached
-    }
+    // Never trust an expired/evicted cache's revision as the source of truth.
+    const row = await db
+      .select({ revision: settings.revision })
+      .from(settings)
+      .where(eq(settings.id, VALUE_ID))
+      .then(takeUnique)
+    const cached = await getCachedResolvedSettings(redis, row?.revision ?? 0)
+    if (cached) return cached
   }
-
-  const resolved = resolveSettings(await getSettings(db))
-  if (redis) {
-    await setCachedResolvedSettings(redis, resolved)
-  }
+  const snapshot = await readSettings(db)
+  const resolved = resolveSettings(snapshot.data)
+  if (redis) await setCachedResolvedSettings(redis, resolved, snapshot.revision)
   return resolved
 }
 

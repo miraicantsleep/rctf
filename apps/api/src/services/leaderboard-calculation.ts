@@ -1,10 +1,10 @@
 import { config } from '@rctf/config'
 import type { DatabaseClient } from '@rctf/db'
-import { challenges, scoreEvents, solves, users } from '@rctf/db'
+import { challenges, solves, users } from '@rctf/db'
 import { takeUnique } from '@rctf/db/util'
 import type { ScoreContext } from '@rctf/scoring/base'
 import { ChallengeScoringKind } from '@rctf/types'
-import { and, asc, inArray, lte, sql, sum } from 'drizzle-orm'
+import { and, asc, inArray, lte, sql } from 'drizzle-orm'
 import type {
   CalculatedLeaderboard,
   InternalChallengeInfo,
@@ -20,6 +20,7 @@ import {
   scoringKindOf,
 } from './challenge-queries'
 import { getCompetitionTiming, type CompetitionTiming } from './settings'
+import { divisionAtCutoff, historicalDynamicEntries } from './historical-scores'
 
 const numberOfBloods = 3
 
@@ -169,12 +170,16 @@ const compareUsers = (a: InternalUserInfo, b: InternalUserInfo): number => {
   return (a.lastSolve ?? Infinity) - (b.lastSolve ?? Infinity)
 }
 
-const getUsersSnapshot = (db: DatabaseClient): Promise<UserSnapshot[]> =>
+const getUsersSnapshot = (
+  db: DatabaseClient,
+  cutoff?: number
+): Promise<UserSnapshot[]> =>
   db
     .select({
       id: users.id,
       name: users.name,
-      division: users.division,
+      division:
+        cutoff === undefined ? users.division : divisionAtCutoff(cutoff),
       banned: users.banned,
     })
     .from(users)
@@ -606,7 +611,30 @@ const rebuildRuntimeState = async (
   cutoff?: number
 ): Promise<LeaderboardRuntimeState> => {
   const state = createRuntimeState(seed, timing)
-  const allSolves = await getSolvesAfterCursor(db, null, cutoff)
+  let allSolves = await getSolvesAfterCursor(db, null, cutoff)
+  if (cutoff !== undefined) {
+    const dynamicIds = getDynamicChallengeIds(state)
+    const dynamicSet = new Set(dynamicIds)
+    allSolves = allSolves.filter(solve => !dynamicSet.has(solve.challengeid))
+    if (dynamicIds.length) {
+      const historical = historicalDynamicEntries(db, cutoff, dynamicIds)
+      const entries = await db.select().from(historical)
+      allSolves.push(
+        ...entries.map(entry => ({
+          id: `${entry.userId}:${entry.challengeId}`,
+          userid: entry.userId,
+          challengeid: entry.challengeId,
+          points: entry.points,
+          createdat: entry.createdAt,
+          pointsUpdatedAt: entry.pointsUpdatedAt,
+        }))
+      )
+    }
+    allSolves.sort(
+      (a, b) =>
+        a.createdat.localeCompare(b.createdat) || a.id.localeCompare(b.id)
+    )
+  }
 
   const batchResult = processSolveBatch(
     state,
@@ -616,10 +644,6 @@ const rebuildRuntimeState = async (
   )
   state.processedSolveCount = batchResult.consumedSolveCount
   state.lastSolveCursor = batchResult.lastConsumedSolveCursor
-
-  if (cutoff !== undefined) {
-    await loadFrozenDynamicContribs(db, state, timing, cutoff)
-  }
 
   return state
 }
@@ -634,7 +658,7 @@ const loadLeaderboardSeed = async (
   cutoff?: number
 ): Promise<{ seed: LeaderboardRebuildSeed; timing: CompetitionTiming }> => {
   const [dbUsers, dbChallenges, timing] = await Promise.all([
-    getUsersSnapshot(db),
+    getUsersSnapshot(db, cutoff),
     getPublicChallengesSnapshot(db),
     getCompetitionTiming(db, redis),
   ])
@@ -710,6 +734,7 @@ export const createCachedLeaderboardCalculator = (
     }
 
     if (
+      cutoff !== undefined ||
       !state ||
       state.providerIdentity !== seed.providerIdentity ||
       state.timingFingerprint !== seed.timingFingerprint ||
@@ -772,10 +797,7 @@ export const createCachedLeaderboardCalculator = (
     }
 
     state.lastDynamicPointCursor = dynamicPointCursorBeforeBatch
-    const dynamicRefresh =
-      cutoff === undefined
-        ? await refreshDynamicContribs(db, state, timing)
-        : await loadFrozenDynamicContribs(db, state, timing, cutoff)
+    const dynamicRefresh = await refreshDynamicContribs(db, state, timing)
     if (dynamicRefresh.needsRebuild) {
       return await rebuild()
     }
@@ -789,58 +811,6 @@ export const createCachedLeaderboardCalculator = (
 }
 
 type RefreshResult = { changed: boolean; needsRebuild: boolean }
-
-const loadFrozenDynamicContribs = async (
-  db: DatabaseClient,
-  state: LeaderboardRuntimeState,
-  timing: CompetitionTiming,
-  cutoff: number
-): Promise<RefreshResult> => {
-  const dynamicIds = getDynamicChallengeIds(state)
-  if (dynamicIds.length === 0) {
-    return { changed: false, needsRebuild: false }
-  }
-
-  const totals = await db
-    .select({
-      userId: scoreEvents.userid,
-      challengeId: scoreEvents.challengeid,
-      points: sum(scoreEvents.pointsDelta).mapWith(Number),
-    })
-    .from(scoreEvents)
-    .where(
-      and(
-        inArray(scoreEvents.challengeid, dynamicIds),
-        lte(scoreEvents.eventAt, new Date(cutoff).toISOString())
-      )
-    )
-    .groupBy(scoreEvents.userid, scoreEvents.challengeid)
-
-  const frozen = new Map(
-    totals
-      .filter(
-        (row): row is typeof row & { userId: string } => row.userId !== null
-      )
-      .map(row => [`${row.userId}\0${row.challengeId}`, row.points ?? 0])
-  )
-
-  let changed = false
-  for (const user of state.userInfos.values()) {
-    for (const challengeId of user.solvedChallengeIds) {
-      if (!dynamicIds.includes(challengeId)) continue
-      const points = frozen.get(`${user.id}\0${challengeId}`) ?? 0
-      if (user.solveContribs.get(challengeId) !== points) {
-        user.solveContribs.set(challengeId, points)
-        changed = true
-      }
-    }
-  }
-
-  if (changed) {
-    recomputeScores(state, timing)
-  }
-  return { changed, needsRebuild: false }
-}
 
 const refreshDynamicContribs = async (
   db: DatabaseClient,

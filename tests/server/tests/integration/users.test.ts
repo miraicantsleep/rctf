@@ -2,6 +2,7 @@ import { config } from '@rctf/config'
 import { createDatabase, users } from '@rctf/db'
 import {
   BadBody,
+  BadDivisionNotAllowed,
   BadDivisionChangeEnded,
   BadKnownCtftimeId,
   BadKnownEmail,
@@ -21,6 +22,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
 import { createToken, TokenKind } from '../../../../apps/api/src/lib/tokens'
+import { updateUserInternal } from '../../../../apps/api/src/services/users'
 import { getApp, request } from '../../app'
 import {
   deleteUserByEmail,
@@ -780,4 +782,58 @@ describe('users service', () => {
       await expectResponse(res, BadKnownName)
     })
   })
+})
+
+test('division changes require explicit enablement while profile edits and admin overrides work', async () => {
+  const db = createDatabase(config.database.sql).db
+  const team = await generateRealTestUser()
+  const original = config.allowDivisionChanges
+  try {
+    config.allowDivisionChanges = false
+    const division = Object.keys(config.divisions).find(
+      d => d !== team.user.division
+    )!
+    for (const version of ['v1', 'v2']) {
+      const res = await request(app, `/api/${version}/users/me`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${await generateAuthToken(team.user.id)}`,
+        },
+        body: JSON.stringify({ division }),
+      })
+      await expectResponse(res, BadDivisionNotAllowed)
+    }
+    const { createRedis } = await import('../../../../apps/api/src/util/redis')
+    const redis = await createRedis()
+    const updates = {
+      division: team.user.division,
+      name: team.user.name,
+      countryCode: null,
+      statusText: 'Updated',
+    }
+    expect(
+      (await updateUserInternal(db, redis, team.user, updates)).success
+    ).toBe(true)
+    config.allowDivisionChanges = true
+    expect(
+      (await updateUserInternal(db, redis, team.user, { ...updates, division }))
+        .success
+    ).toBe(true)
+    config.allowDivisionChanges = false
+    expect(
+      (
+        await updateUserInternal(
+          db,
+          redis,
+          { ...team.user, division },
+          updates,
+          { bypassDivisionFreeze: true }
+        )
+      ).success
+    ).toBe(true)
+  } finally {
+    config.allowDivisionChanges = original
+    await team.cleanup()
+  }
 })

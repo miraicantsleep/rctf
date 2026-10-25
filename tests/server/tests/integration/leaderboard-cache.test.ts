@@ -8,6 +8,7 @@ import {
   settings,
   solves,
   users,
+  userDivisions,
   type ChallengeData,
   type EditableSettings,
 } from '@rctf/db'
@@ -24,8 +25,16 @@ import {
   getGraph,
   isFrozenSnapshotReady,
 } from '../../../../apps/api/src/cache/leaderboard'
+import { getFullUser } from '../../../../apps/api/src/services/full-user'
+import {
+  getChallengeLeaderboardWithTotal,
+  getLeaderboardWithTotal,
+  searchLeaderboard,
+} from '../../../../apps/api/src/services/leaderboard-queries'
+import { historicalDynamicEntries } from '../../../../apps/api/src/services/historical-scores'
 import { scoreProvider } from '../../../../apps/api/src/providers/instances/score'
 import {
+  getChallengeScoresWithPosition,
   getDynamicScoresForUsers,
   getLeaderboardChallengeData,
 } from '../../../../apps/api/src/services/challenges'
@@ -317,6 +326,247 @@ describe('frozen leaderboard cutoff', () => {
     expect(await getDynamicScoresForUsers(db, [user.id], T1)).toEqual(
       new Map([[user.id, [{ id: challenge.id, points: 80, pointDelta: 80 }]]])
     )
+  })
+  test('keeps historical dynamic entries after removal and recreation, including negative scores', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    const active = await insertUser()
+    const zero = await insertUser()
+    const negative = await insertUser()
+    const challenge = await insertChallenge({
+      flags: [],
+      scoring: {
+        kind: ChallengeScoringKind.DYNAMIC,
+        source: {
+          transport: DynamicScoringTransport.WEBHOOK,
+          secret: crypto.randomUUID(),
+        },
+      },
+    })
+    const event = (userid: string, pointsDelta: number, time: number) => ({
+      id: crypto.randomUUID(),
+      challengeid: challenge.id,
+      userid,
+      pointsDelta,
+      eventAt: isoAt(time),
+      source: 'feed' as const,
+    })
+    await db
+      .insert(scoreEvents)
+      .values([
+        event(active.id, 80, T0),
+        event(active.id, -80, T2),
+        event(active.id, 30, T3),
+        event(zero.id, 20, T0),
+        event(zero.id, -20, T1),
+        event(negative.id, -5, T0),
+      ])
+    await insertSolve({
+      challengeId: challenge.id,
+      userId: active.id,
+      createdAt: isoAt(T3),
+      points: 30,
+      source: 'feed',
+    })
+    const timing = {
+      startTime: config.startTime,
+      endTime: config.endTime,
+      freezeTime: T1,
+    }
+    const view = { frozen: true as const, ready: true, cutoff: T1 }
+    const frozen = await calculateLeaderboard(db, redis, { cutoff: T1 })
+    expect(frozen.users.map(u => [u.id, u.score])).toEqual([
+      [active.id, 80],
+      [negative.id, -5],
+    ])
+    expect(frozen.challengeInfos.get(challenge.id)?.solves).toBe(2)
+    await cacheFrozenLeaderboardAndGraph(db, redis, frozen, timing)
+    cleanups.push(async () => {
+      const keys = await redis.keys('frozen-*')
+      if (keys.length) await redis.del(...keys)
+    })
+
+    const page = await getChallengeScoresWithPosition(
+      db,
+      challenge.id,
+      negative.id,
+      10,
+      0,
+      view
+    )
+    expect(page.total).toBe(2)
+    expect(page.myPosition).toBe(2)
+    expect(page.scores.map(u => [u.userId, u.points])).toEqual([
+      [active.id, 80],
+      [negative.id, -5],
+    ])
+    const empty = await getChallengeScoresWithPosition(
+      db,
+      challenge.id,
+      negative.id,
+      10,
+      100,
+      view
+    )
+    expect(empty).toMatchObject({ total: 2, myPosition: 2, scores: [] })
+    const filtered = await getChallengeLeaderboardWithTotal(
+      db,
+      challenge.id,
+      10,
+      0,
+      undefined,
+      undefined,
+      view
+    )
+    expect(filtered.leaderboard.map(u => u.id)).toEqual([
+      active.id,
+      negative.id,
+    ])
+    expect(
+      (await getDynamicScoresForUsers(db, [zero.id], T1)).has(zero.id)
+    ).toBe(false)
+    const [user] = await db.select().from(users).where(eq(users.id, active.id))
+    const profile = await getFullUser(db, user!, view)
+    expect(profile.score).toBe(80)
+    expect(profile.dynamicScores[0]?.points).toBe(80)
+    const graph = await getGraph(db, redis, 10, 0, undefined, {
+      frozen: true,
+      ready: true,
+      cutoff: T1,
+    })
+    expect(graph.find(u => u.id === active.id)?.points.at(-1)?.score).toBe(80)
+    const latest = historicalDynamicEntries(db, T4, [challenge.id])
+    const entries = await db.select().from(latest)
+    expect(
+      new Date(entries.find(u => u.userId === active.id)!.createdAt).getTime()
+    ).toBe(T3)
+  })
+
+  test('orders frozen dynamic ties by the historical points update time', async () => {
+    const db = getDb()
+    const first = await insertUser()
+    const second = await insertUser()
+    const [later, earlier] = [first, second].sort((a, b) =>
+      a.id.localeCompare(b.id)
+    )
+    const challenge = await insertChallenge({
+      flags: [],
+      scoring: {
+        kind: ChallengeScoringKind.DYNAMIC,
+        source: {
+          transport: DynamicScoringTransport.WEBHOOK,
+          secret: crypto.randomUUID(),
+        },
+      },
+    })
+    await db.insert(scoreEvents).values(
+      [earlier!, later!].map((u, i) => ({
+        id: crypto.randomUUID(),
+        userid: u.id,
+        challengeid: challenge.id,
+        pointsDelta: 50,
+        eventAt: isoAt(T0 + i),
+        source: 'feed' as const,
+      }))
+    )
+    const frozen = await calculateLeaderboard(db, undefined, { cutoff: T1 })
+    const redis = await createRedis()
+    await cacheFrozenLeaderboardAndGraph(db, redis, frozen, {
+      startTime: config.startTime,
+      endTime: config.endTime,
+      freezeTime: T1,
+    })
+    cleanups.push(async () => {
+      const keys = await redis.keys('frozen-*')
+      if (keys.length) await redis.del(...keys)
+    })
+    const view = { frozen: true as const, ready: true, cutoff: T1 }
+    const page = await getChallengeScoresWithPosition(
+      db,
+      challenge.id,
+      later!.id,
+      10,
+      0,
+      view
+    )
+    expect(page.scores.map(u => u.userId)).toEqual([earlier!.id, later!.id])
+    expect(page.myPosition).toBe(2)
+    const filtered = await getChallengeLeaderboardWithTotal(
+      db,
+      challenge.id,
+      10,
+      0,
+      undefined,
+      undefined,
+      view
+    )
+    expect(filtered.leaderboard.map(u => u.id)).toEqual([
+      earlier!.id,
+      later!.id,
+    ])
+  })
+
+  test('uses the division at the cutoff even when the change precedes the first snapshot', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    const [original, next] = Object.keys(config.divisions)
+    const user = await insertUser(undefined, { division: original! })
+    // Move the registration fixture into the historical competition window.
+    await db
+      .update(userDivisions)
+      .set({ changedAt: isoAt(T0) })
+      .where(eq(userDivisions.userid, user.id))
+    const challenge = await insertChallenge()
+    await insertSolve({
+      challengeId: challenge.id,
+      userId: user.id,
+      createdAt: isoAt(T0),
+    })
+    await db.update(users).set({ division: next! }).where(eq(users.id, user.id))
+    const frozen = await calculateLeaderboard(db, undefined, { cutoff: T1 })
+    expect(frozen.users.find(u => u.id === user.id)?.division).toBe(original!)
+    await cacheFrozenLeaderboardAndGraph(db, redis, frozen, {
+      startTime: config.startTime,
+      endTime: config.endTime,
+      freezeTime: T1,
+    })
+    cleanups.push(async () => {
+      const keys = await redis.keys('frozen-*')
+      if (keys.length) await redis.del(...keys)
+    })
+    const view = { frozen: true as const, ready: true, cutoff: T1 }
+    expect(
+      (
+        await getLeaderboardWithTotal(db, 10, 0, original, view)
+      ).leaderboard.map(u => u.id)
+    ).toContain(user.id)
+    expect((await getLeaderboardWithTotal(db, 10, 0, next, view)).total).toBe(0)
+    expect(
+      (await searchLeaderboard(db, user.name, 10, 0, original, view))
+        .leaderboard[0]?.division
+    ).toBe(original!)
+    expect(
+      (
+        await getChallengeLeaderboardWithTotal(
+          db,
+          challenge.id,
+          10,
+          0,
+          original,
+          undefined,
+          view
+        )
+      ).total
+    ).toBe(1)
+    const [fresh] = await db.select().from(users).where(eq(users.id, user.id))
+    expect(await getFullUser(db, fresh!, view, true)).toMatchObject({
+      division: next!,
+      scoreboardDivision: original!,
+    })
+    expect(
+      (await getGraph(db, redis, 10, 0, next, { frozen: true, cutoff: T1 }))
+        .length
+    ).toBe(0)
   })
 })
 

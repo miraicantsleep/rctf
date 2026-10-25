@@ -11,7 +11,8 @@ export const shouldNotifyBloodbot = (bloodNumber: number) => {
 export const sendBloodMessage = async (
   user: User,
   challenge: ChallengeData,
-  bloodNumber: number
+  bloodNumber: number,
+  maskSolver = false
 ) => {
   if (!config.bloodBot) {
     return
@@ -23,6 +24,7 @@ export const sendBloodMessage = async (
 
       const view = buildBloodMessageView({
         user,
+        maskSolver,
         challenge,
         bloodNumber,
         bloodEmojis: destination.bloodEmojis,

@@ -94,8 +94,9 @@
       ? validateTiming(
           form.timing.startTime,
           form.timing.endTime,
-          form.timing.freezeTime,
-          !groupMatchesDefaults(form, 'timing', defaults)
+          form.timing.freezeEnabled ? form.timing.freezeTime : null,
+          !groupMatchesDefaults(form, 'timing', defaults),
+          form.timing.freezeEnabled
         )
       : null
   )
@@ -214,8 +215,9 @@
     const error = validateTiming(
       form.timing.startTime,
       form.timing.endTime,
-      form.timing.freezeTime,
-      !groupMatchesDefaults(form, 'timing', defaults)
+      form.timing.freezeEnabled ? form.timing.freezeTime : null,
+      !groupMatchesDefaults(form, 'timing', defaults),
+      form.timing.freezeEnabled
     )
     if (error) {
       toast.error(error)
@@ -351,6 +353,17 @@
                 />
               {/snippet}
             </Field>
+            <label>
+              <input
+                type="checkbox"
+                checked={settingsForm.timing.freezeEnabled}
+                onchange={e => {
+                  settingsForm.timing.freezeEnabled = e.currentTarget.checked
+                  markGroup('timing')
+                }}
+              />
+              Enable scoreboard freeze
+            </label>
             <Field
               label="Scoreboard freeze (local time, optional)"
               description="Public scores stop at this time until the freeze is cleared. Staff with leaderboard access continue to see live scores."
@@ -365,6 +378,8 @@
                     settingsForm.timing.freezeTime = parseDatetimeLocal(
                       e.currentTarget.value
                     )
+                    if (settingsForm.timing.freezeTime === null)
+                      settingsForm.timing.freezeEnabled = false
                     markGroup('timing')
                   }}
                 />

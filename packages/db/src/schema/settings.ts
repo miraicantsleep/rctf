@@ -1,4 +1,4 @@
-import { jsonb, pgTable, text } from 'drizzle-orm/pg-core'
+import { integer, jsonb, pgTable, text } from 'drizzle-orm/pg-core'
 
 export interface EditableSponsor {
   name: string
@@ -15,6 +15,7 @@ export interface EditableSettings {
   startTime?: number
   endTime?: number
   freezeTime?: number
+  freezeEnabled?: boolean
   sponsors?: EditableSponsor[]
   meta?: {
     description?: string
@@ -28,4 +29,5 @@ export interface EditableSettings {
 export const settings = pgTable('settings', {
   id: text().primaryKey().notNull(),
   data: jsonb().$type<EditableSettings>().notNull(),
+  revision: integer().notNull().default(0),
 })

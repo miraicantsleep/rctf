@@ -14,7 +14,9 @@ export const buildBloodMessageView = ({
   bloodEmojis,
   origin,
   provider,
+  maskSolver = false,
 }: {
+  maskSolver?: boolean
   user: Pick<User, 'id' | 'name'>
   challenge: Pick<ChallengeData, 'category' | 'name'>
   bloodNumber: number
@@ -22,7 +24,9 @@ export const buildBloodMessageView = ({
   origin: string
   provider: Pick<MessageProvider, 'escapeText' | 'escapeUrl'>
 }) => {
-  const teamUrl = `${origin}/profile/${user.id}`
+  const teamUrl = maskSolver
+    ? `${origin}/scores`
+    : `${origin}/profile/${user.id}`
   const bloodNumOrdinal = getTimeOrdinal(bloodNumber)
   const bloodNumWord = BLOOD_NUM_WORDS[bloodNumber - 1] ?? bloodNumOrdinal
 
@@ -36,6 +40,6 @@ export const buildBloodMessageView = ({
     challengeCategory: challenge.category,
     challengeName: challenge.name,
     teamUrl: provider.escapeUrl(teamUrl),
-    teamName: provider.escapeText(user.name),
+    teamName: provider.escapeText(maskSolver ? '??' : user.name),
   }
 }

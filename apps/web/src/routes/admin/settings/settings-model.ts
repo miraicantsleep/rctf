@@ -20,6 +20,7 @@ export interface AdminSettingsShape {
   startTime?: number
   endTime?: number
   freezeTime?: number
+  freezeEnabled?: boolean
   homeContent?: string
   logoLightUrl?: string
   logoDarkUrl?: string
@@ -36,6 +37,7 @@ interface TimingGroup {
   startTime: number | null
   endTime: number | null
   freezeTime: number | null
+  freezeEnabled: boolean
   dirty: boolean
 }
 
@@ -72,6 +74,7 @@ export interface SettingsPatch {
   startTime?: number | null
   endTime?: number | null
   freezeTime?: number | null
+  freezeEnabled?: boolean | null
   homeContent?: string | null
   logoLightUrl?: string | null
   logoDarkUrl?: string | null
@@ -102,6 +105,7 @@ export function buildPatch(
     patch.startTime = matches ? null : state.timing.startTime
     patch.endTime = matches ? null : state.timing.endTime
     patch.freezeTime = matches ? null : state.timing.freezeTime
+    patch.freezeEnabled = matches ? null : state.timing.freezeEnabled
   }
 
   if (state.logo.dirty) {
@@ -135,7 +139,8 @@ export function validateTiming(
   start: number | null,
   end: number | null,
   freeze: number | null,
-  active: boolean
+  active: boolean,
+  freezeEnabled = freeze !== null
 ): string | null {
   if (!active) return null
   if (start === null || end === null) {
@@ -144,7 +149,9 @@ export function validateTiming(
   if (start >= end) {
     return 'Start time must be before end time.'
   }
-  if (freeze !== null && (freeze < start || freeze > end)) {
+  if (freezeEnabled && freeze === null)
+    return 'Scoreboard freeze time is required when enabled.'
+  if (freezeEnabled && freeze !== null && (freeze < start || freeze > end)) {
     return 'Scoreboard freeze time must be between start and end time.'
   }
   return null
@@ -234,6 +241,9 @@ export function initialFormState(
       startTime: overrides.startTime ?? defaults.startTime ?? null,
       endTime: overrides.endTime ?? defaults.endTime ?? null,
       freezeTime: overrides.freezeTime ?? defaults.freezeTime ?? null,
+      freezeEnabled:
+        overrides.freezeEnabled ??
+        (overrides.freezeTime ?? defaults.freezeTime) !== undefined,
       dirty: false,
     },
     logo: {
@@ -272,7 +282,9 @@ export function groupMatchesDefaults(
       return (
         form.timing.startTime === (defaults.startTime ?? null) &&
         form.timing.endTime === (defaults.endTime ?? null) &&
-        form.timing.freezeTime === (defaults.freezeTime ?? null)
+        form.timing.freezeTime === (defaults.freezeTime ?? null) &&
+        form.timing.freezeEnabled ===
+          (defaults.freezeEnabled ?? defaults.freezeTime !== undefined)
       )
     case 'logo':
       return (

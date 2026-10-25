@@ -6,6 +6,8 @@ order: 4
 
 The blood bot announces the first teams to solve each challenge in Discord, Telegram, or both.
 
+During a public scoreboard freeze, announcements replace the solver name with ?? and link to the scoreboard. Challenge names and blood positions remain visible. This also applies to custom templates; announcements are not replayed when the freeze ends.
+
 ## Configuration
 
 ```yaml title="rctf.d/bloodbot.yaml"

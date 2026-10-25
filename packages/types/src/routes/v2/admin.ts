@@ -758,6 +758,7 @@ const AdminSettingsUpdateBody = z.object({
       freezeTime: example(z.nullish(z.int()), 1710842400000).check(
         z.describe('Scoreboard freeze time as a Unix ms timestamp.')
       ),
+      freezeEnabled: z.nullish(z.boolean()),
       sponsors: z.nullish(z.array(SponsorUpdateSchemaV2)),
       meta: z.nullish(
         z.object({

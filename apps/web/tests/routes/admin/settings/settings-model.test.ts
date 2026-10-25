@@ -24,6 +24,7 @@ function cleanState(): SettingsFormState {
       startTime: null,
       endTime: null,
       freezeTime: null,
+      freezeEnabled: false,
       dirty: false,
     },
     logo: { light: '', dark: '', dirty: false },
@@ -65,6 +66,7 @@ describe('buildPatch', () => {
       startTime: 1000,
       endTime: 2000,
       freezeTime: null,
+      freezeEnabled: false,
       dirty: true,
     }
     state.faviconUrl.value = '/stale.ico'
@@ -73,6 +75,7 @@ describe('buildPatch', () => {
       startTime: null,
       endTime: null,
       freezeTime: null,
+      freezeEnabled: null,
     })
   })
 
@@ -82,12 +85,14 @@ describe('buildPatch', () => {
       startTime: 1710000000000,
       endTime: 1710864000000,
       freezeTime: 1710800000000,
+      freezeEnabled: true,
       dirty: true,
     }
     expect(buildPatch(state, {})).toEqual({
       startTime: 1710000000000,
       endTime: 1710864000000,
       freezeTime: 1710800000000,
+      freezeEnabled: true,
     })
   })
 
@@ -388,12 +393,14 @@ describe('reset builders', () => {
       startTime: 1000,
       endTime: 2000,
       freezeTime: null,
+      freezeEnabled: false,
       dirty: true,
     })
     expect(resetGroup({}, 'timing')).toEqual({
       startTime: null,
       endTime: null,
       freezeTime: null,
+      freezeEnabled: false,
       dirty: true,
     })
   })
@@ -544,5 +551,36 @@ describe('groupMatchesDefaults', () => {
     expect(groupMatchesDefaults(state, 'sponsors', defaults)).toBe(true)
     state.sponsors.list = []
     expect(groupMatchesDefaults(state, 'sponsors', defaults)).toBe(false)
+  })
+})
+
+describe('explicit freeze controls', () => {
+  it('disables an inherited schedule without discarding it', () => {
+    const defaults = {
+      startTime: 1000,
+      endTime: 3000,
+      freezeTime: 2000,
+      freezeEnabled: true,
+    }
+    const state = initialFormState({}, defaults)
+    state.timing.freezeEnabled = false
+    state.timing.dirty = true
+    expect(buildPatch(state, defaults)).toMatchObject({
+      freezeEnabled: false,
+      freezeTime: 2000,
+    })
+    expect(
+      initialFormState({ freezeEnabled: false }, defaults).timing.freezeEnabled
+    ).toBe(false)
+    state.timing = resetGroup(defaults, 'timing')
+    expect(buildPatch(state, defaults)).toMatchObject({
+      freezeEnabled: null,
+      freezeTime: null,
+    })
+  })
+
+  it('requires a schedule only while enabled', () => {
+    expect(validateTiming(1000, 3000, null, true, true)).toContain('required')
+    expect(validateTiming(1000, 3000, 999, true, false)).toBeNull()
   })
 })

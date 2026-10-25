@@ -26,6 +26,10 @@ import {
   getCompetitionTiming,
   invalidateResolvedSettingsCache,
   resolveSettings,
+  getSettings,
+  getResolvedSettings,
+  updateSettings,
+  isScoreboardFrozen,
 } from '../../../../apps/api/src/services/settings'
 import {
   frozenSnapshotFingerprint,
@@ -761,7 +765,8 @@ describe('admin settings', () => {
     test('serves legacy sponsors from cached resolved settings', async () => {
       const redis = await createRedis()
       const entry = {
-        version: 1,
+        version: 2,
+        revision: 0,
         defaultsSignature: JSON.stringify(getConfigDefaults()),
         resolved: {
           ...resolveSettings({}),
@@ -1017,5 +1022,171 @@ describe('admin settings', () => {
         await cleanup()
       }
     })
+  })
+})
+
+describe('settings concurrency and freeze controls', () => {
+  test('merges concurrent non-overlapping settings patches', async () => {
+    const db = getDb()
+    await Promise.all([
+      updateSettings(db, { ctfName: 'Concurrent name' }),
+      updateSettings(db, { homeContent: 'Concurrent content' }),
+    ])
+    expect(await getSettings(db)).toMatchObject({
+      ctfName: 'Concurrent name',
+      homeContent: 'Concurrent content',
+    })
+  })
+
+  for (const evict of [false, true]) {
+    test(`rejects a delayed old cache fill${evict ? ' after cache eviction' : ''}`, async () => {
+      const db = getDb()
+      const redis = await createRedis()
+      const oldFreeze = config.startTime + 1000
+      const newFreeze = oldFreeze + 1000
+      await updateSettings(db, { freezeTime: oldFreeze }, redis)
+      await invalidateResolvedSettingsCache(redis)
+      let release!: () => void
+      let reached!: () => void
+      const gate = new Promise<void>(resolve => {
+        release = resolve
+      })
+      const paused = new Promise<void>(resolve => {
+        reached = resolve
+      })
+      const delayedRedis = new Proxy(redis, {
+        get(target, key, receiver) {
+          if (key === 'rctfCacheSettings')
+            return async (
+              ...args: Parameters<typeof redis.rctfCacheSettings>
+            ) => {
+              reached()
+              await gate
+              return target.rctfCacheSettings(...args)
+            }
+          return Reflect.get(target, key, receiver)
+        },
+      })
+      const oldRead = getResolvedSettings(db, delayedRedis)
+      try {
+        await paused
+        await updateSettings(db, { freezeTime: newFreeze }, redis)
+        if (evict) await invalidateResolvedSettingsCache(redis)
+      } finally {
+        release()
+        await oldRead
+      }
+      expect((await getCompetitionTiming(db, redis)).freezeTime).toBe(newFreeze)
+      expect(JSON.parse((await redis.get('settings:resolved'))!).revision).toBe(
+        2
+      )
+    })
+  }
+
+  test('reads authoritative timing when Redis is unavailable', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    const unavailable = new Proxy(redis, {
+      get(target, key, receiver) {
+        if (key === 'get' || key === 'rctfCacheSettings')
+          return async () => {
+            throw new Error('Redis unavailable')
+          }
+        return Reflect.get(target, key, receiver)
+      },
+    })
+    await updateSettings(
+      db,
+      { freezeTime: config.startTime + 1000 },
+      unavailable
+    )
+    expect((await getCompetitionTiming(db, unavailable)).freezeTime).toBe(
+      config.startTime + 1000
+    )
+  })
+
+  test('ignores legacy cache envelopes', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    await redis.set(
+      'settings:resolved',
+      JSON.stringify({
+        version: 1,
+        defaultsSignature: JSON.stringify(getConfigDefaults()),
+        resolved: { ...resolveSettings({}), freezeTime: 123 },
+      })
+    )
+    expect((await getCompetitionTiming(db, redis)).freezeTime).toBe(
+      config.freezeTime ?? null
+    )
+  })
+
+  test('explicitly disables an inherited freeze and preserves null-reset behavior', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    const original = config.freezeTime
+    config.freezeTime = config.startTime + 1000
+    try {
+      await updateSettings(db, { freezeEnabled: false }, redis)
+      expect((await getCompetitionTiming(db, redis)).freezeTime).toBeNull()
+      await updateSettings(db, { freezeEnabled: null }, redis)
+      expect((await getCompetitionTiming(db, redis)).freezeTime).toBe(
+        config.freezeTime
+      )
+      await updateSettings(
+        db,
+        { freezeEnabled: false, startTime: config.freezeTime + 1000 },
+        redis
+      )
+      expect((await getCompetitionTiming(db, redis)).freezeTime).toBeNull()
+    } finally {
+      config.freezeTime = original
+    }
+  })
+
+  test('requires a schedule when explicitly enabling the freeze', async () => {
+    const original = config.freezeTime
+    config.freezeTime = undefined
+    try {
+      await expect(
+        updateSettings(getDb(), { freezeEnabled: true })
+      ).rejects.toThrow('freezeTime is required')
+    } finally {
+      config.freezeTime = original
+    }
+  })
+
+  test('keeps a ready snapshot on an unchanged timing save and invalidates changed timing', async () => {
+    const db = getDb()
+    const redis = await createRedis()
+    const timing = {
+      startTime: config.startTime,
+      endTime: config.endTime,
+      freezeTime: config.startTime + 1000,
+    }
+    await updateSettings(db, timing, redis)
+    const fingerprint = frozenSnapshotFingerprint(timing)
+    await redis.set(keyFrozenSnapshotFingerprint, fingerprint)
+    for (const freezeTime of [timing.freezeTime, timing.freezeTime + 1]) {
+      const res = await request(app, '/api/v2/admin/settings', {
+        method: 'PUT',
+        headers: await jsonHeaders(settingsAdmin.user.id),
+        body: JSON.stringify({ data: { ...timing, freezeTime } }),
+      })
+      await expectResponse(res, GoodAdminSettingsUpdate)
+      expect(await redis.get(keyFrozenSnapshotFingerprint)).toBe(
+        freezeTime === timing.freezeTime ? fingerprint : null
+      )
+    }
+  })
+
+  test('freezes at the cutoff and stays frozen after the competition ends', () => {
+    const timing = { startTime: 0, endTime: 2000, freezeTime: 1000 }
+    expect(isScoreboardFrozen(timing, 999)).toBe(false)
+    for (const now of [1000, 1001, 3000])
+      expect(isScoreboardFrozen(timing, now)).toBe(true)
+    expect(isScoreboardFrozen({ ...timing, freezeTime: null }, 3000)).toBe(
+      false
+    )
   })
 })

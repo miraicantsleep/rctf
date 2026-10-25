@@ -23,6 +23,8 @@ usersGroup.route(UpdateUserRoute, async ({ ctx, user, res, body }) => {
   })
 
   if (!result.success) {
+    if (result.error === 'badDivisionNotAllowed')
+      return res.badDivisionNotAllowed()
     if (result.error === 'badDivisionChangeEnded') {
       return res.badBody({
         reason: 'Division cannot be changed after the CTF has ended',

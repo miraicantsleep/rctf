@@ -5,6 +5,8 @@ import {
   createDatabase,
   DynamicScoringTransport,
   solves,
+  scoreEvents,
+  settings,
   users,
   type ChallengeData,
 } from '@rctf/db'
@@ -12,12 +14,23 @@ import {
   BadUnknownUser,
   GoodFlag,
   GoodUserData,
+  GoodUserDataV2,
+  Permissions,
   GoodUserSelfData,
   GoodUserSelfDataV2,
 } from '@rctf/types'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { eq } from 'drizzle-orm'
 import type { Hono } from 'hono'
+import {
+  updateSettings,
+  invalidateResolvedSettingsCache,
+} from '../../../../apps/api/src/services/settings'
+import {
+  frozenSnapshotFingerprint,
+  keyFrozenSnapshotFingerprint,
+} from '../../../../apps/api/src/cache/leaderboard'
+import { createRedis } from '../../../../apps/api/src/util/redis'
 import { getApp, request } from '../../app'
 import {
   expectResponse,
@@ -284,4 +297,157 @@ describe('full-user service', () => {
       }
     })
   })
+})
+
+test('frozen self profiles keep personal progress live without exposing live ranks or counts', async () => {
+  const db = getDb()
+  const redis = await createRedis()
+  const team = await generateRealTestUser()
+  const staff = await generateRealTestUser(Permissions.leaderboardRead)
+  const before = await generateChallenge()
+  const after = await generateChallenge()
+  const freezeTime = Date.now() - 60_000
+  const timing = {
+    startTime: freezeTime - 60_000,
+    endTime: freezeTime + 120_000,
+    freezeTime,
+  }
+  try {
+    await updateSettings(db, timing, redis)
+    await db
+      .update(users)
+      .set({
+        score: 900,
+        globalRank: 2,
+        divisionRank: 2,
+        frozenScore: 500,
+        frozenGlobalRank: 1,
+        frozenDivisionRank: 1,
+        frozenDivision: team.user.division,
+      })
+      .where(eq(users.id, team.user.id))
+    await db
+      .update(challenges)
+      .set({ score: 400, solveCount: 9, frozenScore: 500, frozenSolveCount: 1 })
+      .where(eq(challenges.id, before.challenge.id))
+    await db
+      .update(challenges)
+      .set({ score: 400, solveCount: 3, frozenScore: 500, frozenSolveCount: 0 })
+      .where(eq(challenges.id, after.challenge.id))
+    await db.insert(solves).values(
+      [before, after].map((entry, i) => ({
+        id: crypto.randomUUID(),
+        userid: team.user.id,
+        challengeid: entry.challenge.id,
+        createdat: new Date(freezeTime + (i ? 1 : -1)).toISOString(),
+      }))
+    )
+    await db
+      .insert(scoreEvents)
+      .values({
+        id: crypto.randomUUID(),
+        userid: team.user.id,
+        challengeid: after.challenge.id,
+        pointsDelta: 400,
+        source: 'flag',
+        eventAt: new Date(freezeTime + 1).toISOString(),
+      })
+    await redis.set(
+      keyFrozenSnapshotFingerprint,
+      frozenSnapshotFingerprint(timing)
+    )
+    const auth = {
+      Authorization: `Bearer ${await generateAuthToken(team.user.id)}`,
+    }
+    for (const version of ['v1', 'v2']) {
+      for (const id of ['me', team.user.id]) {
+        const res = await request(app, `/api/${version}/users/${id}`, {
+          method: 'GET',
+          headers: auth,
+        })
+        const body = await expectResponse(
+          res,
+          version === 'v1'
+            ? id === 'me'
+              ? GoodUserSelfData
+              : GoodUserData
+            : id === 'me'
+              ? GoodUserSelfDataV2
+              : GoodUserDataV2
+        )
+        expect(body.data).toMatchObject({
+          score: 900,
+          globalPlace: 1,
+          divisionPlace: 1,
+        })
+        expect(body.data.solves).toHaveLength(2)
+        expect(
+          body.data.solves.find((s: any) => s.id === before.challenge.id)
+        ).toMatchObject({ points: 500, solves: 1 })
+        expect(
+          body.data.solves.find((s: any) => s.id === after.challenge.id)
+        ).toMatchObject({ points: 500, solves: 0 })
+        if (version === 'v2')
+          expect(
+            body.data.solves.find((s: any) => s.id === after.challenge.id)
+          ).toMatchObject({ awardedPoints: 400, bloodIndex: null })
+      }
+      const publicRes = await request(
+        app,
+        `/api/${version}/users/${team.user.id}`,
+        { method: 'GET' }
+      )
+      const publicBody = await expectResponse(
+        publicRes,
+        version === 'v1' ? GoodUserData : GoodUserDataV2
+      )
+      expect(publicBody.data.score).toBe(500)
+      expect(publicBody.data.solves).toHaveLength(1)
+      const staffRes = await request(
+        app,
+        `/api/${version}/users/${team.user.id}`,
+        {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${await generateAuthToken(staff.user.id)}`,
+          },
+        }
+      )
+      const staffBody = await expectResponse(
+        staffRes,
+        version === 'v1' ? GoodUserData : GoodUserDataV2
+      )
+      expect(staffBody.data).toMatchObject({
+        score: 900,
+        globalPlace: 2,
+        divisionPlace: 2,
+      })
+    }
+    await redis.del(keyFrozenSnapshotFingerprint)
+    const pendingRes = await request(app, '/api/v2/users/me', {
+      method: 'GET',
+      headers: auth,
+    })
+    const pending = await expectResponse(pendingRes, GoodUserSelfDataV2)
+    expect(pending.data).toMatchObject({
+      score: 900,
+      globalPlace: null,
+      divisionPlace: null,
+    })
+    expect(pending.data.solves).toHaveLength(2)
+    for (const solve of pending.data.solves)
+      expect(solve).toMatchObject({
+        points: null,
+        solves: null,
+        bloodIndex: null,
+      })
+  } finally {
+    await after.cleanup()
+    await before.cleanup()
+    await staff.cleanup()
+    await team.cleanup()
+    await db.delete(settings).where(eq(settings.id, 'value-0'))
+    await invalidateResolvedSettingsCache(redis)
+    await redis.del(keyFrozenSnapshotFingerprint)
+  }
 })

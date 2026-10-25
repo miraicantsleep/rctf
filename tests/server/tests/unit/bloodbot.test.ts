@@ -96,3 +96,33 @@ describe('blood bot', () => {
     )
   })
 })
+
+test('frozen blood templates expose the ice emoji and scoreboard URL without solver identity', () => {
+  const view = buildBloodMessageView({
+    user: { id: 'private-team-id', name: 'Private Team Name' },
+    challenge: { category: 'web', name: 'Example challenge' },
+    bloodNumber: 2,
+    bloodEmojis: [],
+    origin: 'https://ctf.example.com',
+    provider: { escapeText: value => value, escapeUrl: value => value },
+    maskSolver: true,
+  })
+  const message = mustache.render(
+    '{{teamName}} {{teamUrl}} {{challengeName}} {{bloodNumOrdinal}}',
+    view
+  )
+  expect(view.teamName).toBe('??')
+  expect(view.teamUrl).toBe('https://ctf.example.com/scores')
+  expect(view.challengeName).toBe('Example challenge')
+  expect(view.bloodNumOrdinal).toBe('2nd')
+  expect(message).not.toContain('private-team-id')
+  expect(message).not.toContain('Private Team Name')
+})
+
+test('division changes default to disabled and require explicit opt-in', () => {
+  expect(ServerConfigSchema.parse(baseConfig).allowDivisionChanges).toBe(false)
+  expect(
+    ServerConfigSchema.parse({ ...baseConfig, allowDivisionChanges: true })
+      .allowDivisionChanges
+  ).toBe(true)
+})

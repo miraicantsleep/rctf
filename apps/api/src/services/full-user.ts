@@ -5,6 +5,7 @@ import { and, asc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { getDynamicScoresForUsers, getUserChallengeSolves } from './challenges'
 import { getUser } from './users'
 import type { ScoreboardView } from './scoreboard-visibility'
+import { divisionAtCutoff } from './historical-scores'
 
 export type SolveData = {
   category: string
@@ -30,24 +31,35 @@ export type FullUser = Omit<User, 'email' | 'ctftimeId'> & {
   globalPlace: number | null
   divisionPlace: number | null
   solves: SolveData[]
+  scoreboardDivision: string
   dynamicScores: DynamicScoreData[]
 }
 
 export const getFullUser = async (
   db: DatabaseClient,
   user: User,
-  view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true }
+  view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true },
+  personalLive = false
 ): Promise<FullUser> => {
-  const cutoff = view.frozen ? view.cutoff : undefined
+  const cutoff = view.frozen && !personalLive ? view.cutoff : undefined
   const [solves, freshRanks, dynamicScoresByUser] = await Promise.all([
-    getUserChallengeSolves(db, user.id, cutoff),
+    getUserChallengeSolves(
+      db,
+      user.id,
+      cutoff,
+      view.frozen ? view.cutoff : undefined
+    ),
     db
       .select({
-        score: view.frozen
-          ? view.ready
-            ? users.frozenScore
-            : sql<number | null>`NULL`
-          : users.score,
+        scoreboardDivision: view.frozen
+          ? sql<string>`COALESCE(${view.ready ? users.frozenDivision : sql`NULL`}, ${divisionAtCutoff(view.cutoff)})`
+          : users.division,
+        score:
+          view.frozen && !personalLive
+            ? view.ready
+              ? users.frozenScore
+              : sql<number | null>`NULL`
+            : users.score,
         globalRank: view.frozen
           ? view.ready
             ? users.frozenGlobalRank
@@ -68,7 +80,7 @@ export const getFullUser = async (
   const challengeIds = solves.map(item => item.solve.challengeid)
   const challengeScores = new Map<
     string,
-    { score: number; solveCount: number }
+    { score: number | null; solveCount: number | null }
   >()
   const challengeAwardedPoints = new Map<string, number>()
 
@@ -112,8 +124,8 @@ export const getFullUser = async (
 
     for (const row of challRows) {
       challengeScores.set(row.id, {
-        score: row.score ?? 0,
-        solveCount: row.solveCount ?? 0,
+        score: row.score,
+        solveCount: row.solveCount,
       })
     }
 
@@ -126,6 +138,11 @@ export const getFullUser = async (
 
   return {
     ...user,
+    division:
+      view.frozen && !personalLive
+        ? (freshRanks?.scoreboardDivision ?? user.division)
+        : user.division,
+    scoreboardDivision: freshRanks?.scoreboardDivision ?? user.division,
     email: user.email ?? null,
     ctftimeId: user.ctftimeId ?? null,
     score: freshRanks?.score ?? 0,
@@ -142,7 +159,12 @@ export const getFullUser = async (
         points: challScore?.score ?? null,
         awardedPoints:
           challengeAwardedPoints.get(item.solve.challengeid) ?? null,
-        bloodIndex: item.bloodIndex,
+        bloodIndex:
+          view.frozen &&
+          (!view.ready ||
+            new Date(item.solve.createdat).getTime() > view.cutoff)
+            ? null
+            : item.bloodIndex,
       }
     }),
   }
@@ -151,11 +173,12 @@ export const getFullUser = async (
 export const getFullUserFromId = async (
   db: DatabaseClient,
   id: string,
-  view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true }
+  view: ScoreboardView = { frozen: false, cutoff: undefined, ready: true },
+  personalLive = false
 ): Promise<FullUser | undefined> => {
   const user = await getUser(db, id)
   if (!user || user.banned) {
     return undefined
   }
-  return await getFullUser(db, user, view)
+  return await getFullUser(db, user, view, personalLive)
 }

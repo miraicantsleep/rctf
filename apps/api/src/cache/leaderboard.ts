@@ -100,6 +100,7 @@ const cacheLeaderboard = async (
         score: user.score,
         global_rank: idx + 1,
         division_rank: divRank,
+        division: user.division,
         last_solve_at: user.lastSolve
           ? new Date(user.lastSolve).toISOString()
           : null,
@@ -119,12 +120,13 @@ const cacheLeaderboard = async (
         UPDATE users SET
           frozen_score = COALESCE(resolved.score, 0),
           frozen_global_rank = resolved.global_rank,
-          frozen_division_rank = resolved.division_rank
+          frozen_division_rank = resolved.division_rank,
+          frozen_division = resolved.division
         FROM (
-          SELECT u.id, vals.score, vals.global_rank, vals.division_rank
+          SELECT u.id, vals.score, vals.global_rank, vals.division_rank, vals.division
           FROM users u
           LEFT JOIN jsonb_to_recordset(${JSON.stringify(userUpdates)}::jsonb)
-            AS vals(id text, score int, global_rank int, division_rank int, last_solve_at timestamptz, last_tiebreak_solve_at timestamptz)
+            AS vals(id text, score int, global_rank int, division_rank int, division text, last_solve_at timestamptz, last_tiebreak_solve_at timestamptz)
             ON u.id = vals.id
           WHERE u.frozen_global_rank IS NOT NULL OR vals.id IS NOT NULL
         ) resolved
@@ -165,7 +167,7 @@ const cacheLeaderboard = async (
           vals.last_tiebreak_solve_at
         FROM users u
         LEFT JOIN jsonb_to_recordset(${JSON.stringify(userUpdates)}::jsonb)
-          AS vals(id text, score int, global_rank int, division_rank int, last_solve_at timestamptz, last_tiebreak_solve_at timestamptz)
+          AS vals(id text, score int, global_rank int, division_rank int, division text, last_solve_at timestamptz, last_tiebreak_solve_at timestamptz)
           ON u.id = vals.id
         WHERE u.global_rank IS NOT NULL OR vals.id IS NOT NULL
       ) resolved
@@ -732,7 +734,7 @@ export const getGraph = async (
     .from(users)
     .where(
       division
-        ? sql`${rankedFilter} AND ${users.division} = ${division}`
+        ? sql`${rankedFilter} AND ${frozen ? users.frozenDivision : users.division} = ${division}`
         : rankedFilter
     )
     .orderBy(frozen ? frozenLeaderboardOrderSql : leaderboardOrderSql)
@@ -759,7 +761,7 @@ export const frozenSnapshotFingerprint = (timing: {
   startTime: number
   endTime: number
   freezeTime: number
-}): string => `${timing.startTime}:${timing.endTime}:${timing.freezeTime}`
+}): string => `v2:${timing.startTime}:${timing.endTime}:${timing.freezeTime}`
 
 export const isFrozenSnapshotReady = async (
   redis: TypedRedis,

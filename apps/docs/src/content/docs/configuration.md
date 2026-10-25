@@ -63,6 +63,7 @@ The following environment variables are supported. They override values from con
 | --------------------------------- | -------------- | ------------------------------------------ |
 | `<yellow>RCTF_START_TIME</yellow>`            | `integer{:ts}` | Competition start time (Unix milliseconds) |
 | `<yellow>RCTF_END_TIME</yellow>`              | `integer{:ts}` | Competition end time (Unix milliseconds)   |
+| `<yellow>RCTF_ALLOW_DIVISION_CHANGES</yellow>` | `boolean{:ts}` | Allow participant division changes; defaults to false |
 | `<yellow>RCTF_FREEZE_TIME</yellow>`           | `integer{:ts}` | Optional public scoreboard freeze time (Unix milliseconds) |
 | `<yellow>RCTF_LOGIN_TIMEOUT</yellow>`         | `integer{:ts}` | Verification token expiry in milliseconds  |
 | `<yellow>RCTF_USER_MEMBERS</yellow>`          | `boolean{:ts}` | Enable team members feature                |
@@ -183,7 +184,7 @@ freezeTime: 1735754400000 # Optional: January 1, 2025 19:00 UTC
 | --- | --- | --- | --- |
 | `<red>startTime</red>` | `number{:ts}` | - | Competition start time in Unix milliseconds (required) |
 | `<red>endTime</red>` | `number{:ts}` | - | Competition end time in Unix milliseconds (required) |
-| `<red>freezeTime</red>` | `number{:ts}` | - | Optional time between start and end when public standings, graphs, profiles, challenge statistics, and CTFtime output stop updating. Teams retain live access to their own score and solves; users with `leaderboardRead` retain the live scoreboard. The freeze remains active until this setting is cleared. |
+| `<red>freezeTime</red>` | `number{:ts}` | - | Optional time between start and end when public standings, graphs, profiles, challenge statistics, and CTFtime output stop updating. Teams retain live access to their own score and solves; users with `leaderboardRead` retain the live scoreboard. The freeze remains active until disabled with the runtime `freezeEnabled: false` override. Setting an override to `null` restores its configured default. |
 
 :::tip
 To convert a date to Unix milliseconds: `$ <red>date</red> <dim>-d</dim> <green>"2025-01-01T00:00:00Z"</green> +%s000` or use `new Date('2025-01-01T00:00:00Z').getTime(){:ts}` in JavaScript.
@@ -224,10 +225,13 @@ divisionACLs:
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `<red>divisions</red>` | `object{:ts}` | `{ open: "Open" }{:ts}` | Map of division ID to display name |
+| `<red>allowDivisionChanges</red>` | `boolean{:ts}` | `false{:ts}` | Allow participants to change their division before the event ends. Initial division selection and admin overrides remain available. |
 | `<red>defaultDivision</red>` | `string{:ts}` | - | Default division for new users (optional) |
 | `<red>divisionACLs</red>` | `array{:ts}` | - | Access control rules for divisions (optional) |
 
 #### Division ACLs
+
+Frozen standings use the division recorded at the cutoff. The division-history migration initializes existing teams from their current division; changes made before the migration cannot be reconstructed automatically.
 
 ACLs control which divisions a user can register for based on their email. Each ACL entry has:
 

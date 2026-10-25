@@ -1,3 +1,4 @@
+import { config } from '@rctf/config'
 import type { DatabaseClient, DatabaseTx, User } from '@rctf/db'
 import { challenges, solves, users } from '@rctf/db'
 import { getErrorConstraint, takeUnique } from '@rctf/db/util'
@@ -200,7 +201,10 @@ export const createUserV2 = async (
 
 export type UpdateUserResult =
   | { success: true; user: User }
-  | { success: false; error: 'badDivisionChangeEnded' | 'badKnownName' }
+  | {
+      success: false
+      error: 'badDivisionChangeEnded' | 'badDivisionNotAllowed' | 'badKnownName'
+    }
 
 export const updateUserInternal = async (
   db: DatabaseClient,
@@ -217,6 +221,8 @@ export const updateUserInternal = async (
     if (Date.now() >= endTime) {
       return { success: false, error: 'badDivisionChangeEnded' }
     }
+    if (!config.allowDivisionChanges)
+      return { success: false, error: 'badDivisionNotAllowed' }
   }
 
   let updated

@@ -4,6 +4,7 @@ import { SponsorSchemaV2 } from '../util'
 import { example } from '../util/example'
 
 export const AdminSettingsSchema = z.object({
+  freezeEnabled: z.optional(z.boolean()),
   ctfName: example(z.optional(z.string()), 'rCTF').check(
     z.describe('Name of the CTF.')
   ),

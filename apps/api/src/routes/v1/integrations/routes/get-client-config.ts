@@ -16,6 +16,7 @@ integrationsGroup.route(GetClientConfigRoute, async ({ res, ctx }) => {
       url: sponsor.url,
     })),
     divisions: config.divisions,
+    allowDivisionChanges: config.allowDivisionChanges,
     defaultDivision: config.defaultDivision ?? null,
     origin: config.origin,
     userMembers: config.userMembers,

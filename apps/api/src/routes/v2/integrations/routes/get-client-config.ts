@@ -27,6 +27,7 @@ integrationsGroup.route(GetClientConfigRouteV2, async ({ res, ctx }) => {
     hideChallenges: config.hideChallenges,
     flagFormatPlaceholder: config.flagFormatPlaceholder,
     divisions: config.divisions,
+    allowDivisionChanges: config.allowDivisionChanges,
     defaultDivision: config.defaultDivision ?? null,
     origin: config.origin,
     userMembers: config.userMembers,

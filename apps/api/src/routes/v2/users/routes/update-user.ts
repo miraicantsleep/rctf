@@ -27,6 +27,8 @@ usersGroup.route(UpdateUserRouteV2, async ({ ctx, user, res, body }) => {
   })
 
   if (!result.success) {
+    if (result.error === 'badDivisionNotAllowed')
+      return res.badDivisionNotAllowed()
     if (result.error === 'badDivisionChangeEnded') {
       return res.badDivisionChangeEnded()
     }

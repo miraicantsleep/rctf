@@ -211,6 +211,13 @@
       "when": 1788441839201,
       "tag": "0029_numerous_jigsaw",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1792938655197,
+      "tag": "0030_chilly_taskmaster",
+      "breakpoints": true
     }
   ]
 }
