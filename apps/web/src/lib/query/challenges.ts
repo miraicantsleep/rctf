@@ -299,6 +299,10 @@ export function invalidateAfterSolve(
   markSolved: (id: string) => void
 ): void {
   markSolved(challengeId)
+  void queryClient.invalidateQueries({
+    queryKey: queryKeys.challengeInstance(challengeId),
+    exact: true,
+  })
 
   // FIXME(es3n1n): Small delay to allow the server's leaderboard worker to update the cache
   setTimeout(() => {

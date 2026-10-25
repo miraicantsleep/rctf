@@ -49,6 +49,7 @@ import {
   userIsNotBanned,
 } from './challenge-queries'
 import { rateLimitFlag } from './rate-limit'
+import { stopInstanceAfterSolve } from './instance-lifecycle'
 import { getCompetitionTiming, isScoreboardFrozen } from './settings'
 import { historicalDynamicEntries } from './historical-scores'
 import { createSubmission } from './submissions'
@@ -1607,6 +1608,8 @@ export const submitFlag = async (
 
   requestChallengeRecompute(redis, params.challengeId, 'flag')
   forceLeaderboardUpdate(redis)
+  // The solve has committed; provider cleanup must not delay its response.
+  void stopInstanceAfterSolve(challenge, params.userId, log)
   return res.goodFlag()
 }
 

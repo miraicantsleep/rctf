@@ -7,6 +7,8 @@ import type {
   GoodInstancerActionResult,
   ResponseHelpers,
 } from '@rctf/types'
+import { InstanceStatus } from '@rctf/types'
+import type { PinoLogger } from 'hono-pino'
 import type { TypedRedis } from '../cache/scripts'
 import type {
   InstanceQueryOptions,
@@ -18,6 +20,8 @@ import {
   buildCreateInstanceOptions,
   filterInstanceEndpoints,
   getInstancerChallenge,
+  getInstancerProvider,
+  resolveInstancerName,
   returnInstanceStatusOrError,
   type InstancerResponseHelpers,
 } from './instancer'
@@ -65,13 +69,60 @@ const instancerError = (message: string): instanceDetailsOrError => ({
 })
 
 const instanceQueryOptions = (
-  user: User,
+  teamId: string,
   challenge: Challenge
 ): InstanceQueryOptions => ({
-  teamId: user.id,
+  teamId,
   challengeIntegrationId: inferChallengeIntegrationId(challenge),
   config: challenge.data.instancerConfig!.config,
 })
+
+// Best effort only: callers must not await this when accepting a solve.
+export const stopInstanceAfterSolve = async (
+  challenge: Challenge,
+  teamId: string,
+  log: PinoLogger
+): Promise<void> => {
+  const instancerConfig = challenge.data.instancerConfig
+  if (!instancerConfig) {
+    return
+  }
+
+  const instancerName = resolveInstancerName(instancerConfig)
+  try {
+    const provider = getInstancerProvider(instancerName)
+    if (!provider) {
+      throw new Error(
+        `Instancer "${instancerName ?? 'default'}" is not available`
+      )
+    }
+    if (!provider.capabilities.canStop) {
+      return
+    }
+
+    const options = instanceQueryOptions(teamId, challenge)
+    const instance = await provider.getInstance(options)
+    if (instance.kind === 'instancerError') {
+      throw new Error(instance.message)
+    }
+    if (
+      instance.status === InstanceStatus.STOPPED ||
+      instance.status === InstanceStatus.STOPPING
+    ) {
+      return
+    }
+
+    const result = await provider.deleteInstance(options)
+    if (result.kind === 'instancerError') {
+      throw new Error(result.message)
+    }
+  } catch (err) {
+    log.error(
+      { err, teamId, challengeId: challenge.id, instancerName },
+      'failed to stop instance after solve'
+    )
+  }
+}
 
 const withInstancerChallenge = async (
   { res, db, challengeId, includeHidden }: InstanceRequest,
@@ -101,7 +152,7 @@ export const getInstanceStatus = (
   request: InstanceRequest
 ): Promise<InstanceResponse> =>
   withInstancerChallenge(request, (challenge, provider) =>
-    provider.getInstance(instanceQueryOptions(request.user, challenge))
+    provider.getInstance(instanceQueryOptions(request.user.id, challenge))
   )
 
 export const createInstance = (
@@ -122,7 +173,7 @@ export const deleteInstance = (
     }
 
     return await provider.deleteInstance(
-      instanceQueryOptions(request.user, challenge)
+      instanceQueryOptions(request.user.id, challenge)
     )
   })
 
@@ -140,7 +191,7 @@ export const extendInstance = (
     }
 
     return await provider.extendInstance({
-      ...instanceQueryOptions(request.user, challenge),
+      ...instanceQueryOptions(request.user.id, challenge),
       timeoutMilliseconds: instancerConfig.timeoutMilliseconds,
     })
   })
@@ -185,7 +236,7 @@ export const runInstanceAction = async ({
 
   const outcome = await provider.runAction(
     action.id,
-    instanceQueryOptions(user, challenge)
+    instanceQueryOptions(user.id, challenge)
   )
   if (outcome.kind === 'instancerError') {
     return res.badInstancerError(outcome)

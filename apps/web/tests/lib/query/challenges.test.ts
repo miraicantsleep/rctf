@@ -1,4 +1,6 @@
-import { AdminBotJobStatus } from '@rctf/types'
+import { AdminBotJobStatus, InstanceStatus } from '@rctf/types'
+import { QueryClient } from '@tanstack/svelte-query'
+import { queryKeys } from '$lib/query/keys'
 import { beforeAll, describe, expect, mock, test } from 'bun:test'
 
 mock.module('$app/environment', () => ({ browser: false }))
@@ -10,6 +12,29 @@ beforeAll(async () => {
 })
 
 const sorted = (ids: Set<string>): string[] => [...ids].sort()
+
+describe('invalidateAfterSolve', () => {
+  test('refreshes the solved challenge instance immediately and retains provider status', () => {
+    const queryClient = new QueryClient()
+    const instance = { status: InstanceStatus.RUNNING }
+    const instanceKey = queryKeys.challengeInstance('solved')
+    const otherKey = queryKeys.challengeInstance('other')
+    const adminKey = queryKeys.adminChallengeInstance('solved')
+    for (const key of [instanceKey, otherKey, adminKey]) {
+      queryClient.setQueryData(key, instance)
+    }
+    const markSolved = mock()
+
+    challenges.invalidateAfterSolve(queryClient, 'solved', markSolved)
+
+    expect(markSolved.mock.calls).toEqual([['solved']])
+    expect(queryClient.getQueryState(instanceKey)?.isInvalidated).toBe(true)
+    expect(queryClient.getQueryData(instanceKey)).toEqual(instance)
+    expect(queryClient.getQueryState(otherKey)?.isInvalidated).toBe(false)
+    expect(queryClient.getQueryState(adminKey)?.isInvalidated).toBe(false)
+    queryClient.clear()
+  })
+})
 
 describe('deriveSolvedIds', () => {
   test('unions server and local ids without duplicates', () => {
